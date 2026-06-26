@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://image.tmdb.org data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>MKV Remuxer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="titlebar"></div>
+  <div id="app">
+
+    <!-- ── Main view ── -->
+    <div id="view-main" class="view active">
+      <header class="app-header">
+        <div class="app-title"><span class="app-icon">🎞️</span><span data-i18n="app_title">MKV Remuxer</span></div>
+        <div class="header-actions">
+          <button class="btn-icon" id="btn-toggle-log" title="Log" data-i18n-title="log">📋</button>
+          <button class="btn-icon" id="btn-settings" title="Settings" data-i18n-title="settings">⚙</button>
+        </div>
+      </header>
+
+      <div class="main-body">
+        <!-- Tools warning banner (shown if mkvmerge missing) -->
+        <div id="tools-banner" class="tools-banner hidden">
+          <span id="tools-banner-msg"></span>
+          <button class="btn-secondary small" id="tools-banner-action"></button>
+        </div>
+
+        <!-- Drop zone -->
+        <div id="dropzone" class="dropzone">
+          <div class="dropzone-inner">
+            <div class="dropzone-icon">📥</div>
+            <div class="dropzone-text" data-i18n="drag_here">Drag video files here</div>
+            <div class="dropzone-sub" data-i18n="or">or</div>
+            <div class="dropzone-buttons">
+              <button class="btn-secondary" id="btn-add-files" data-i18n="add_files">Add files...</button>
+              <button class="btn-secondary" id="btn-rip-disc" data-i18n="rip_disc" data-i18n-title="rip_disc_title">💿 Rip Disc...</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Queue -->
+        <div id="queue-section" class="queue-section hidden">
+          <div class="queue-header">
+            <span id="queue-count">0 files</span>
+            <div class="queue-actions">
+              <button class="btn-icon small" id="btn-add-more" data-i18n-title="add_more" title="Add more">＋</button>
+              <button class="btn-secondary small" id="btn-rip-disc-queue" title="Rip a Blu-ray disc">💿</button>
+              <button class="btn-icon small" id="btn-clear-queue" data-i18n-title="clear_all" title="Clear all">🗑</button>
+            </div>
+          </div>
+          <div id="queue-list" class="queue-list"></div>
+
+          <!-- Non-blocking rip progress banner -->
+          <div id="rip-banner" class="rip-banner hidden">
+            <span class="disc-spinner-sm"></span>
+            <span id="rip-banner-label" data-i18n="disc_ripping_label">Ripping disc…</span>
+            <div class="rip-banner-bar-wrap">
+              <div class="progress-bar" id="rip-banner-bar" style="width:0%"></div>
+            </div>
+            <span id="rip-banner-pct" class="muted">0%</span>
+            <button class="btn-icon small" id="btn-rip-banner-cancel" title="Cancel rip">✕</button>
+          </div>
+
+          <div class="queue-footer">
+            <div class="overall-progress hidden" id="overall-progress">
+              <div class="progress-bar-wrap"><div class="progress-bar" id="overall-bar" style="width:0%"></div></div>
+              <span id="overall-pct">0%</span>
+            </div>
+            <button class="btn-primary large" id="btn-process" data-i18n="process_all">Process All</button>
+            <button class="btn-danger hidden" id="btn-cancel" data-i18n="cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="log-wrap hidden" id="log-wrap">
+        <div class="log-header"><span data-i18n="log">Log</span><button class="btn-icon small" id="btn-clear-log">✕</button></div>
+        <div id="log" class="log"></div>
+      </div>
+    </div>
+
+    <!-- ── Unified identify modal (search + manual) ── -->
+    <div id="view-movie-search" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header"><h2 id="search-heading" data-i18n="identify_movie">Identify Movie</h2><button class="btn-icon" id="btn-close-search">✕</button></div>
+        <div class="search-row">
+          <input type="text" id="search-input" class="input" data-i18n-ph="search_placeholder" placeholder="Search movie title...">
+          <button class="btn-primary" id="btn-search" data-i18n="search">Search</button>
+        </div>
+        <div id="search-series-row" class="form-row hidden" style="margin-bottom:10px">
+          <div class="form-group"><label data-i18n="season">Season</label><input type="number" id="search-season" class="input" min="0" max="99" value="1"></div>
+          <div class="form-group"><label data-i18n="episode">Episode</label><input type="number" id="search-episode" class="input" min="0" max="999" value="1"></div>
+        </div>
+        <div id="search-results" class="search-results"></div>
+        <div class="manual-block hidden" id="manual-block">
+          <div class="manual-block-header" data-i18n="manual_block">Not the right one? Enter details manually:</div>
+          <div class="form-row">
+            <div class="form-group" style="flex:3"><label data-i18n="title">Title</label><input type="text" id="manual-title" class="input"></div>
+            <div class="form-group" style="flex:1"><label data-i18n="year">Year</label><input type="text" id="manual-year" class="input" maxlength="4"></div>
+          </div>
+          <div class="form-row hidden" id="manual-series-row">
+            <div class="form-group"><label data-i18n="season">Season</label><input type="number" id="manual-season" class="input" min="0" max="99" value="1"></div>
+            <div class="form-group"><label data-i18n="episode">Episode</label><input type="number" id="manual-episode" class="input" min="0" max="999" value="1"></div>
+          </div>
+          <button class="btn-secondary" id="btn-confirm-manual" data-i18n="use_these">Use these details</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Track preview modal ── -->
+    <div id="view-preview" class="modal-overlay hidden">
+      <div class="modal wide">
+        <div class="modal-header"><h2 data-i18n="track_preview">Track Preview</h2><button class="btn-icon" id="btn-close-preview">✕</button></div>
+        <p class="hint" data-i18n="preview_hint_edit">Click a track to keep or drop it. Your choices override the filters for this file.</p>
+        <div id="preview-list" class="preview-list"></div>
+        <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center">
+          <button class="btn-secondary" id="btn-preview-reset" data-i18n="reset_overrides">Reset to filters</button>
+          <button class="btn-secondary" id="btn-preview-close2" data-i18n="close">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Language picker modal ── -->
+    <div id="view-langpick" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header"><h2 data-i18n="pick_display_lang">Pick display language</h2><button class="btn-icon" id="langpick-close">✕</button></div>
+        <p class="hint" data-i18n="pick_lang_hint">The language name will be shown in the language you pick.</p>
+        <input type="text" id="langpick-search" class="input" data-i18n-ph="filter_languages" placeholder="Filter languages...">
+        <div id="langpick-list" class="langpick-list"></div>
+      </div>
+    </div>
+
+    <!-- ── Text input modal (for preset names etc) ── -->
+    <div id="view-asktext" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header"><h2 id="asktext-title">Input</h2></div>
+        <div class="form-group"><label id="asktext-label">Value:</label><input type="text" id="asktext-input" class="input"></div>
+        <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn-secondary" id="asktext-cancel" data-i18n="cancel">Cancel</button>
+          <button class="btn-primary" id="asktext-ok" data-i18n="ok">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Disc rip modal ── -->
+    <div id="view-disc-rip" class="modal-overlay hidden">
+      <div class="modal wide">
+        <div class="modal-header">
+          <h2 data-i18n="disc_rip_heading">💿 Rip Disc</h2>
+          <button class="btn-icon" id="btn-close-disc-rip">✕</button>
+        </div>
+
+        <!-- State: scanning -->
+        <div id="disc-scanning" class="disc-state">
+          <div class="disc-spinner"></div>
+          <p data-i18n="disc_scanning">Scanning disc...</p>
+        </div>
+
+        <!-- State: no disc / error -->
+        <div id="disc-error" class="disc-state hidden">
+          <p class="disc-error-msg" id="disc-error-msg"></p>
+          <button class="btn-secondary" id="btn-disc-retry" data-i18n="disc_try_again">Try again</button>
+        </div>
+
+        <!-- State: title list -->
+        <div id="disc-titles" class="disc-state hidden">
+          <p class="hint" id="disc-name"></p>
+          <p class="hint warn hidden" id="disc-review-hint"></p>
+
+          <!-- TMDb identification card -->
+          <div id="disc-identify-card" class="disc-identify-card">
+            <div id="disc-identify-searching" class="disc-identify-searching hidden">
+              <span class="disc-spinner-sm"></span>
+              <span data-i18n="disc_identifying">Identifying…</span>
+            </div>
+            <div id="disc-identify-result" class="disc-identify-result hidden">
+              <img id="disc-identify-poster" class="disc-identify-poster" src="" alt="">
+              <div class="disc-identify-meta">
+                <div id="disc-identify-title" class="disc-identify-movie-title"></div>
+                <div id="disc-identify-year" class="disc-identify-movie-year muted"></div>
+              </div>
+              <span id="disc-identify-type-badge" class="disc-type-badge"></span>
+              <button class="btn-secondary small" id="btn-disc-identify-change" data-i18n="disc_identify_change">Change</button>
+            </div>
+            <div id="disc-identify-none" class="disc-identify-none hidden">
+              <span class="muted" data-i18n="disc_identify_none">Not identified</span>
+              <button class="btn-secondary small" id="btn-disc-identify-search" data-i18n="disc_identify_search">Search…</button>
+            </div>
+            <!-- inline search -->
+            <div id="disc-identify-search-box" class="disc-identify-search-box hidden">
+              <div class="disc-identify-type-toggle">
+                <label><input type="radio" name="disc-search-type" value="movie" checked> <span data-i18n="disc_type_movie">🎬 Movie</span></label>
+                <label><input type="radio" name="disc-search-type" value="tv"> <span data-i18n="disc_type_tv">📺 Series</span></label>
+              </div>
+              <div class="disc-identify-search-row">
+                <input type="text" id="disc-identify-query" class="input" style="flex:1" data-i18n-placeholder="disc_search_placeholder">
+                <input type="number" id="disc-identify-year-input" class="input" style="width:72px" placeholder="Year" min="1900" max="2099">
+                <button class="btn-primary small" id="btn-disc-identify-go" data-i18n="search">Search</button>
+              </div>
+            </div>
+            <div id="disc-identify-results-list" class="disc-identify-results-list hidden"></div>
+
+            <!-- Series fields — visible only when identified as TV -->
+            <div id="disc-series-fields" class="disc-series-fields hidden">
+              <label data-i18n="disc_season">Season</label>
+              <input type="number" id="disc-series-season" class="input small-num" value="1" min="1">
+              <label data-i18n="disc_start_ep">Starting episode</label>
+              <input type="number" id="disc-series-start-ep" class="input small-num" value="1" min="1">
+            </div>
+          </div>
+
+          <p class="hint" data-i18n="disc_select_hint">Select the title to rip. Audio and subtitle tracks will be filtered by your settings.</p>
+          <div id="disc-title-list" class="disc-title-list"></div>
+          <div class="modal-footer">
+            <button class="btn-secondary" id="btn-disc-rescan" data-i18n="disc_rescan">Rescan</button>
+            <button class="btn-primary" id="btn-disc-rip" disabled data-i18n="disc_rip_btn">Rip Selected Title</button>
+          </div>
+        </div>
+
+        <!-- State: ripping in progress -->
+        <div id="disc-ripping" class="disc-state hidden">
+          <p id="disc-rip-label" data-i18n="disc_ripping_label">Ripping disc — this may take a while...</p>
+          <div class="progress-bar-wrap" style="margin:16px 0">
+            <div class="progress-bar" id="disc-rip-bar" style="width:0%"></div>
+          </div>
+          <p id="disc-rip-pct" class="muted-center">0%</p>
+          <button class="btn-danger" id="btn-disc-cancel-rip" style="margin-top:8px" data-i18n="cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── MakeMKV setup modal ── -->
+    <div id="view-makemkv-setup" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h2 data-i18n="makemkv_required_title">MakeMKV Required</h2>
+          <button class="btn-icon" id="btn-close-makemkv-setup">✕</button>
+        </div>
+        <p data-i18n="makemkv_required_body">MakeMKV is needed to rip discs (Blu-ray, DVD, UHD). It's free to use while in beta.</p>
+        <div id="makemkv-setup-body"></div>
+        <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn-secondary" id="btn-makemkv-check-again" data-i18n="makemkv_check_again">Check again</button>
+          <button class="btn-primary" id="btn-makemkv-download" data-i18n="makemkv_download">Download MakeMKV</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Settings view ── -->
+    <div id="view-settings" class="view hidden">
+      <header class="app-header">
+        <button class="btn-icon" id="btn-back">←</button>
+        <div class="app-title" data-i18n="settings">Settings</div><span></span>
+      </header>
+      <div class="settings-body">
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_interface">Interface</h3>
+          <div class="acc-body">
+            <div class="setting-row">
+              <label data-i18n="interface_language">Interface language</label>
+              <select id="setting-ui-lang" class="input"></select>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_output">Output</h3>
+          <div class="acc-body">
+            <div class="setting-row"><label data-i18n="dest_folder">Destination folder</label>
+              <div class="path-row"><input type="text" id="setting-output" class="input" readonly><button class="btn-secondary" id="btn-choose-folder" data-i18n="browse">Browse...</button></div>
+            </div>
+            <div class="setting-row">
+              <label data-i18n="on_file_exists">If a file already exists</label>
+              <select id="setting-on-exists" class="input">
+                <option value="rename" data-i18n="exists_rename">Rename (keep both)</option>
+                <option value="skip" data-i18n="exists_skip">Skip the file</option>
+                <option value="overwrite" data-i18n="exists_overwrite">Overwrite</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_movies">Movies</h3>
+          <div class="acc-body">
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_folder">Folder</p>
+              <label class="check-row"><input type="checkbox" id="setting-create-folder"><span data-i18n="create_folder">Create a folder for each movie</span></label>
+              <div class="setting-indent" id="folder-template-row">
+                <div class="setting-row">
+                  <label data-i18n="folder_template">Folder name template</label>
+                  <div class="tpl-field" data-field="folderName" data-vars="file"></div>
+                </div>
+              </div>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_filename">Filename</p>
+              <div class="setting-row">
+                <label data-i18n="output_template">Output filename template</label>
+                <div class="tpl-field" data-field="outputName" data-vars="file"></div>
+              </div>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_title">Internal title</p>
+              <label class="check-row"><input type="checkbox" id="setting-custom-title"><span data-i18n="custom_title">Use a custom internal title (different from the filename)</span></label>
+              <div class="setting-indent" id="movie-title-row">
+                <div class="setting-row">
+                  <label><span data-i18n="internal_title">Internal MKV title</span> <span class="hint-inline" data-i18n="internal_title_hint">(what players show)</span></label>
+                  <div class="tpl-field" data-field="fileTitle" data-vars="file"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_series">TV Series</h3>
+          <div class="acc-body">
+            <p class="hint" data-i18n="series_hint">Used automatically when a file is detected as a TV episode.</p>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_folder">Folder</p>
+              <label class="check-row"><input type="checkbox" id="setting-fetch-episode"><span data-i18n="fetch_episode">Fetch episode titles from TMDb</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-series-folders"><span data-i18n="series_create_folders">Create Series / Season folders (Jellyfin layout)</span></label>
+              <div class="setting-indent" id="series-show-folder-row">
+                <div class="setting-row">
+                  <label data-i18n="series_show_folder">Series folder template</label>
+                  <div class="tpl-field" data-field="seriesShowFolder" data-vars="series"></div>
+                </div>
+              </div>
+              <div class="setting-indent" id="series-season-folder-row">
+                <div class="setting-row">
+                  <label data-i18n="series_season_folder">Season folder template</label>
+                  <div class="tpl-field" data-field="seriesSeasonFolder" data-vars="series"></div>
+                </div>
+              </div>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_filename">Filename</p>
+              <div class="setting-row">
+                <label data-i18n="series_output">Episode filename template</label>
+                <div class="tpl-field" data-field="seriesOutputName" data-vars="series"></div>
+              </div>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_title">Internal title</p>
+              <label class="check-row"><input type="checkbox" id="setting-series-custom-title"><span data-i18n="custom_title">Use a custom internal title (different from the filename)</span></label>
+              <div class="setting-indent" id="series-title-row">
+                <div class="setting-row">
+                  <label><span data-i18n="internal_title">Internal MKV title</span> <span class="hint-inline" data-i18n="internal_title_hint">(what players show)</span></label>
+                  <div class="tpl-field" data-field="seriesFileTitle" data-vars="series"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_audio">Audio</h3>
+          <div class="acc-body">
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_filters">Filters</p>
+              <div class="setting-row">
+                <label><span data-i18n="languages">Languages</span> <span class="hint-inline" data-i18n="comma_codes_variant">(e.g. eng,spa — or spa-ES,spa-LA to filter by variant)</span></label>
+                <input type="text" id="setting-audio-langs" class="input" placeholder="spa, eng, spa-LA">
+              </div>
+              <div class="setting-row">
+                <label><span data-i18n="allowed_codecs">Allowed codecs</span> <span class="hint-inline" data-i18n="empty_all">(empty = all)</span></label>
+                <input type="text" id="setting-audio-codecs" class="input" placeholder="(all)">
+                <div class="chip-row" id="codec-suggestions"></div>
+              </div>
+              <label class="check-row"><input type="checkbox" id="setting-one-audio"><span data-i18n="one_audio">Only one audio track per language (or variant)</span></label>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_track_names">Track names</p>
+              <div class="setting-row">
+                <label data-i18n="track_name_template">Track name template</label>
+                <div class="tpl-field" data-field="audioName" data-vars="audio"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_subtitles">Subtitles</h3>
+          <div class="acc-body">
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_filters">Filters</p>
+              <div class="setting-row">
+                <label><span data-i18n="languages">Languages</span> <span class="hint-inline" data-i18n="empty_all">(empty = all)</span></label>
+                <input type="text" id="setting-sub-langs" class="input" placeholder="spa, eng">
+              </div>
+              <label class="check-row"><input type="checkbox" id="setting-one-sub"><span data-i18n="one_sub">Only one subtitle track per language (keeps forced separately)</span></label>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_track_names">Track names</p>
+              <div class="setting-row">
+                <label data-i18n="track_name_template">Track name template</label>
+                <div class="tpl-field" data-field="subName" data-vars="subtitle"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_metadata">Metadata</h3>
+          <div class="acc-body">
+            <div class="setting-row">
+              <label class="check-row"><input type="checkbox" id="setting-imdb-tag"><span data-i18n="imdb_tag">Write IMDb/TMDb ID as a tag inside the MKV</span></label>
+            </div>
+            <div class="setting-row">
+              <label class="check-row"><input type="checkbox" id="setting-imdb-folder"><span data-i18n="imdb_folder">Add [imdbid-ttXXXX] to the folder name (best for Jellyfin matching)</span></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_tmdb">TMDb</h3>
+          <div class="acc-body">
+            <div class="setting-row"><label data-i18n="api_key">API Key</label><input type="text" id="setting-tmdb-key" class="input" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"></div>
+            <p class="hint" id="tmdb-key-hint" data-i18n="tmdb_key_hint">Used for movie identification and metadata. <a href="#" id="tmdb-key-link">Get a free key at themoviedb.org →</a></p>
+            <p class="hint warn hidden" id="tmdb-key-warn" data-i18n="tmdb_key_warn">No API key configured — movie identification is disabled.</p>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_jellyfin">Jellyfin</h3>
+          <div class="acc-body">
+            <div class="setting-row">
+              <label class="check-row"><input type="checkbox" id="setting-jellyfin-enabled"><span data-i18n="jellyfin_refresh">Refresh Jellyfin after processing</span></label>
+            </div>
+            <div id="jellyfin-fields">
+              <div class="setting-row"><label data-i18n="server_url">Server URL</label><input type="text" id="setting-jellyfin-url" class="input" placeholder="https://jellyfin.example.com"></div>
+              <div class="setting-row"><label data-i18n="api_key">API Key</label><input type="text" id="setting-jellyfin-key" class="input"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header"><span data-i18n="sec_makemkv">MakeMKV</span> <span id="makemkv-status-badge" class="status-badge"></span></h3>
+          <div class="acc-body">
+            <div class="setting-row">
+              <label data-i18n="makemkv_status_label">Status</label>
+              <span id="makemkv-status-text" class="muted" data-i18n="makemkv_status_checking">Checking...</span>
+            </div>
+            <div class="setting-row">
+              <label data-i18n="rip_temp_folder">Temporary rip folder</label>
+              <div class="path-row">
+                <input type="text" id="setting-rip-temp" class="input" data-i18n-ph="rip_temp_placeholder">
+                <button class="btn-secondary" id="btn-choose-rip-temp" data-i18n="browse">Browse...</button>
+              </div>
+              <p class="hint" data-i18n="rip_temp_hint">Where ripped files are stored before remux. Empty = app data folder (recommended).</p>
+            </div>
+            <div class="setting-row" id="makemkv-download-row">
+              <button class="btn-secondary" id="btn-makemkv-open-download" data-i18n="makemkv_open_download">Download MakeMKV</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-footer">
+          <button class="btn-primary" id="btn-save-settings" data-i18n="save_settings">Save Settings</button>
+          <span class="save-feedback hidden" id="save-feedback" data-i18n="saved">✓ Saved</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

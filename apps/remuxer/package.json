@@ -1,0 +1,44 @@
+{
+  "name": "mkv-remuxer",
+  "version": "1.0.0",
+  "description": "Simple MKV remux tool with track filtering and naming templates",
+  "author": "Luis de Campos <luisdecampos@gmail.com>",
+  "license": "MIT",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:mac": "electron-builder --mac"
+  },
+  "dependencies": {
+    "@mkv-tools/core": "workspace:*"
+  },
+  "devDependencies": {
+    "electron": "25.4.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.luisdecampos.mkvremuxer",
+    "productName": "MKV Remuxer",
+    "copyright": "Copyright © 2025",
+    "directories": { "output": "dist" },
+    "asar": true,
+    "compression": "maximum",
+    "files": [
+      "src/**/*",
+      "!src/**/*.map",
+      "!**/*.md",
+      "!**/.DS_Store"
+    ],
+    "extraResources": [
+      { "from": "vendor/", "to": "vendor/", "filter": ["**"] }
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "target": [{ "target": "dmg" }],
+      "category": "public.app-category.video",
+      "darkModeSupport": true,
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}
