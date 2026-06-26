@@ -8,6 +8,19 @@ importers:
 
   .: {}
 
+  apps/merger:
+    dependencies:
+      '@mkv-tools/core':
+        specifier: workspace:*
+        version: link:../../packages/mkv-core
+    devDependencies:
+      electron:
+        specifier: 42.5.0
+        version: 42.5.0
+      electron-builder:
+        specifier: ^26.15.3
+        version: 26.15.3(electron-builder-squirrel-windows@26.15.3)
+
   apps/remuxer:
     dependencies:
       '@mkv-tools/core':

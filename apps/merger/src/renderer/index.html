@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>MKV Merger</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="titlebar"></div>
+  <div id="app">
+
+    <!-- ── Main view ── -->
+    <div id="view-main" class="view active">
+      <header class="app-header">
+        <div class="app-title">MKV Merger</div>
+        <div class="header-actions">
+          <button class="btn-icon" id="btn-toggle-log" title="Log">📋</button>
+          <button class="btn-icon" id="btn-settings" title="Settings">⚙</button>
+        </div>
+      </header>
+
+      <div class="main-body">
+
+        <!-- Tools warning -->
+        <div id="tools-banner" class="tools-banner hidden">
+          <span id="tools-banner-msg"></span>
+        </div>
+
+        <!-- Empty state -->
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon">⊕</div>
+          <div class="empty-text">Add two or more video files</div>
+          <div class="empty-sub">The app will keep the best video and let you pick audio and subtitle tracks from each source.</div>
+          <button class="btn-primary" id="btn-add-sources">Add sources…</button>
+        </div>
+
+        <!-- Sources + track selection -->
+        <div id="sources-section" class="sources-section hidden">
+
+          <!-- Sync warning -->
+          <div id="sync-warning" class="sync-warning hidden">
+            ⚠ Duration mismatch detected between sources — audio may be out of sync.
+            <span id="sync-diff"></span>
+          </div>
+
+          <div class="sources-header">
+            <span class="sources-title">Sources</span>
+            <button class="btn-secondary small" id="btn-add-more">Add more…</button>
+            <button class="btn-icon small" id="btn-clear-all" title="Remove all">🗑</button>
+          </div>
+
+          <!-- Source list — each source renders a card -->
+          <div id="source-list" class="source-list"></div>
+
+          <!-- Output row -->
+          <div class="output-section">
+            <div class="output-row">
+              <label class="output-label">Output</label>
+              <input type="text" id="output-path" class="input" readonly>
+              <button class="btn-secondary" id="btn-browse-output">Browse…</button>
+            </div>
+            <div class="output-row" id="output-name-row">
+              <label class="output-label">Filename</label>
+              <input type="text" id="output-name" class="input" placeholder="output.mkv">
+            </div>
+          </div>
+
+          <div class="footer-actions">
+            <div class="progress-wrap hidden" id="progress-wrap">
+              <div class="progress-bar-track">
+                <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+              </div>
+              <span id="progress-pct" class="pct-label">0%</span>
+            </div>
+            <button class="btn-primary large" id="btn-merge">Merge</button>
+            <button class="btn-danger hidden" id="btn-cancel">Cancel</button>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="log-wrap hidden" id="log-wrap">
+        <div class="log-header">
+          Log
+          <button class="btn-icon small" id="btn-clear-log">✕</button>
+        </div>
+        <div id="log" class="log"></div>
+      </div>
+    </div>
+
+    <!-- ── Settings view ── -->
+    <div id="view-settings" class="view hidden">
+      <header class="app-header">
+        <button class="btn-icon" id="btn-back">←</button>
+        <div class="app-title">Settings</div>
+        <span></span>
+      </header>
+      <div class="settings-body">
+
+        <div class="settings-section">
+          <h3 class="settings-section-title">Output</h3>
+          <div class="setting-row">
+            <label>Destination folder</label>
+            <div class="path-row">
+              <input type="text" id="setting-output" class="input" readonly>
+              <button class="btn-secondary" id="btn-choose-output-folder">Browse…</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <label>If a file already exists</label>
+            <select id="setting-on-exists" class="input">
+              <option value="rename">Rename (keep both)</option>
+              <option value="skip">Skip the file</option>
+              <option value="overwrite">Overwrite</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-footer">
+          <button class="btn-primary" id="btn-save-settings">Save Settings</button>
+          <span class="save-feedback hidden" id="save-feedback">✓ Saved</span>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

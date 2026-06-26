@@ -1,0 +1,44 @@
+{
+  "name": "mkv-merger",
+  "version": "1.0.0",
+  "description": "Merge best tracks from multiple MKV sources into one file",
+  "author": "Luis de Campos <luisdecampos@gmail.com>",
+  "license": "MIT",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "build": "electron-builder",
+    "build:mac": "electron-builder --mac"
+  },
+  "dependencies": {
+    "@mkv-tools/core": "workspace:*"
+  },
+  "devDependencies": {
+    "electron": "42.5.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.luisdecampos.mkvmerger",
+    "productName": "MKV Merger",
+    "copyright": "Copyright © 2025",
+    "directories": { "output": "dist" },
+    "asar": true,
+    "compression": "maximum",
+    "files": [
+      "src/**/*",
+      "!src/**/*.map",
+      "!**/*.md",
+      "!**/.DS_Store"
+    ],
+    "extraResources": [
+      { "from": "vendor/", "to": "vendor/", "filter": ["**"] }
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "target": [{ "target": "dmg" }],
+      "category": "public.app-category.video",
+      "darkModeSupport": true,
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}
