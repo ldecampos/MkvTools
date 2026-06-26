@@ -1,0 +1,158 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            arch: arm64
+          - os: macos-13
+            platform: mac
+            arch: x64
+          - os: windows-latest
+            platform: win
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.platform }}-${{ matrix.arch }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── mkvmerge vendoring ─────────────────────────────────────────────────────
+
+      - name: Vendor mkvmerge (macOS)
+        if: matrix.platform == 'mac'
+        run: |
+          brew install mkvtoolnix
+          BREW=$(brew --prefix)
+          for app in apps/remuxer apps/merger; do
+            mkdir -p "$app/vendor/libs"
+            cp "$BREW/bin/mkvmerge" "$app/vendor/mkvmerge"
+            chmod +x "$app/vendor/mkvmerge"
+            # Copy Qt6 dylibs the binary links against
+            otool -L "$app/vendor/mkvmerge" | awk '/\.dylib/{print $1}' \
+              | grep -v '^/usr/lib\|^/System' | while read lib; do
+                name=$(basename "$lib")
+                src=$(find "$BREW/lib" -name "$name" 2>/dev/null | head -1)
+                [ -f "$src" ] && cp "$src" "$app/vendor/libs/" || true
+              done
+          done
+
+      - name: Vendor mkvmerge (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          choco install mkvtoolnix --no-progress -y
+          $src = "C:\Program Files\MKVToolNix\mkvmerge.exe"
+          foreach ($app in @("apps\remuxer", "apps\merger")) {
+            New-Item -ItemType Directory -Force "$app\vendor" | Out-Null
+            Copy-Item $src "$app\vendor\mkvmerge.exe"
+          }
+
+      - name: Vendor mkvmerge (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y mkvtoolnix
+          for app in apps/remuxer apps/merger; do
+            mkdir -p "$app/vendor"
+            cp "$(which mkvmerge)" "$app/vendor/mkvmerge"
+            chmod +x "$app/vendor/mkvmerge"
+          done
+
+      # ── Build ──────────────────────────────────────────────────────────────────
+
+      - name: Build Remuxer
+        run: pnpm --filter mkv-remuxer build:${{ matrix.platform }} -- --${{ matrix.arch }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Merger
+        run: pnpm --filter mkv-merger build:${{ matrix.platform }} -- --${{ matrix.arch }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Artifacts ─────────────────────────────────────────────────────────────
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/remuxer/dist/*.dmg
+            apps/remuxer/dist/*.exe
+            apps/remuxer/dist/*.AppImage
+            apps/remuxer/dist/*.deb
+            apps/merger/dist/*.dmg
+            apps/merger/dist/*.exe
+            apps/merger/dist/*.AppImage
+            apps/merger/dist/*.deb
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ── Publish GitHub Release (only on v* tags) ──────────────────────────────────
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    name: Publish Release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body: |
+            ## MKV Tools ${{ github.ref_name }}
+
+            ### MKV Remuxer
+            Remux MKV files: pick the best audio and subtitle tracks and produce a clean output.
+
+            ### MKV Merger
+            Merge tracks from 2+ MKV sources: choose which source provides video and pick any audio/subtitle tracks from each source.
+
+            ---
+            **macOS**: download the `.dmg` matching your chip — `arm64` (Apple Silicon) or `x64` (Intel).
+            **Windows**: download the `.exe` installer.
+            **Linux**: download the `.AppImage` or `.deb`.
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
