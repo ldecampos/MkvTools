@@ -10,7 +10,7 @@ let activeProcess = null;
 function checkSync(sources) {
   const durations = sources.map(s => {
     const vid = (s.tracks || []).find(t => t.type === 'video');
-    return vid ? (vid.properties?.duration ?? 0) : 0;
+    return vid ? (vid.duration ?? 0) : 0;
   });
   const valid = durations.filter(d => d > 0);
   if (valid.length < 2) return { ok: true };

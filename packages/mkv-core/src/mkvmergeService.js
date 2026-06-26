@@ -34,6 +34,7 @@ async function identifyTracks(input, onLog) {
           lang,
           name,
           channels: t.properties?.audio_channels || null,
+          duration: t.properties?.duration ?? 0,
           forced: !!t.properties?.forced_track,
           default: !!t.properties?.default_track,
           variant: variantInfo?.variant || null,

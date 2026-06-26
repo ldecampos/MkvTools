@@ -90,11 +90,10 @@ ipcMain.handle('choose-sources', async () => {
 // ── Identify source tracks ────────────────────────────────────────────────────────
 ipcMain.handle('identify-source', async (_, file) => {
   try {
-    const tracks = await identifyTracks(file, (msg) => {
+    const { tracks, title } = await identifyTracks(file, (msg) => {
       mainWindow.webContents.send('log', msg);
     });
-    const sync = checkSync([{ tracks }]);
-    return { ok: true, tracks, file };
+    return { ok: true, tracks, title, file };
   } catch (err) {
     return { ok: false, error: err.message, file };
   }

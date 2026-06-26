@@ -209,7 +209,7 @@ function makeTrackRow(type, sourceIdx, track) {
   row.appendChild(input);
   row.appendChild(name);
 
-  const codec = track.codec || track.properties?.codec_id || '';
+  const codec = track.codec || '';
   if (codec) {
     const badge = document.createElement('span');
     badge.className = 'track-badge';
@@ -221,11 +221,10 @@ function makeTrackRow(type, sourceIdx, track) {
 }
 
 function trackLabel(track) {
-  const lang = track.properties?.language || '';
-  const name = track.properties?.track_name || '';
-  const codec = track.codec || '';
-  const ch = track.properties?.audio_channels ? track.properties.audio_channels + 'ch' : '';
-  return [lang, name, ch].filter(Boolean).join(' ') || codec || `Track ${track.id}`;
+  const lang = track.lang || '';
+  const name = track.name || '';
+  const ch = track.channels ? track.channels + 'ch' : '';
+  return [lang, name, ch].filter(Boolean).join(' ') || track.codec || `Track ${track.id}`;
 }
 
 function updateSourceStatus(idx, text, cls) {
@@ -240,7 +239,7 @@ function checkSync() {
   if (sources.length < 2 || !sources.every(s => s.loaded)) return;
   const durations = sources.map(s => {
     const vid = s.tracks.find(t => t.type === 'video');
-    return vid ? (vid.properties?.duration ?? 0) : 0;
+    return vid ? (vid.duration ?? 0) : 0;
   }).filter(d => d > 0);
   if (durations.length < 2) return;
   const diffMs = Math.round((Math.max(...durations) - Math.min(...durations)) / 1e6);
