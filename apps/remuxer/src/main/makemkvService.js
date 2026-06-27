@@ -178,6 +178,9 @@ function parseDiscInfo(lines) {
 
 let activeRip = null;
 
+const RIP_STALL_MS  = 5 * 60_000;  // kill if no progress for 5 minutes
+const RIP_MAX_MS    = 3 * 60 * 60_000; // absolute cap of 3 hours
+
 async function ripTitle({ makemkvcon, discIndex, discTarget, titleId, outputDir, onProgress, onLog }) {
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -192,6 +195,11 @@ async function ripTitle({ makemkvcon, discIndex, discTarget, titleId, outputDir,
     let stderr = '';
     let outputFile = null;
 
+    const abort = (reason) => { proc.kill(); reject(new Error(reason)); };
+    const maxTimer   = setTimeout(() => abort(`Rip exceeded maximum time limit (${RIP_MAX_MS / 3600000}h)`), RIP_MAX_MS);
+    let   stallTimer = setTimeout(() => abort('Rip stalled — no progress for 5 minutes'), RIP_STALL_MS);
+    const resetStall = () => { clearTimeout(stallTimer); stallTimer = setTimeout(() => abort('Rip stalled — no progress for 5 minutes'), RIP_STALL_MS); };
+
     proc.stdout.on('data', d => {
       for (const line of d.toString().split('\n')) {
         const l = line.trim();
@@ -201,6 +209,7 @@ async function ripTitle({ makemkvcon, discIndex, discTarget, titleId, outputDir,
         if (pv) {
           const pct = parseInt(pv[3]) > 0 ? parseInt(pv[1]) / parseInt(pv[3]) : 0;
           onProgress?.(Math.min(pct, 1));
+          resetStall();
           continue;
         }
 
@@ -217,6 +226,7 @@ async function ripTitle({ makemkvcon, discIndex, discTarget, titleId, outputDir,
     proc.stderr.on('data', d => { stderr += d; onLog?.(d.toString().trim()); });
 
     proc.on('close', code => {
+      clearTimeout(maxTimer); clearTimeout(stallTimer);
       activeRip = null;
       if (code === 0 || code === 1) {
         if (!outputFile) {
@@ -233,7 +243,7 @@ async function ripTitle({ makemkvcon, discIndex, discTarget, titleId, outputDir,
       }
     });
 
-    proc.on('error', e => { activeRip = null; reject(e); });
+    proc.on('error', e => { clearTimeout(maxTimer); clearTimeout(stallTimer); activeRip = null; reject(e); });
   });
 }
 

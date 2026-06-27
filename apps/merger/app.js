@@ -103,16 +103,6 @@ function attachEvents() {
     e.preventDefault();
     window.api.openUrl('https://www.themoviedb.org/settings/api');
   });
-  $('btn-ocr-check')?.addEventListener('click', refreshOcrStatus);
-  $('btn-choose-ocr-path')?.addEventListener('click', async () => {
-    const f = await window.api.chooseFolder();
-    if (f) { $('setting-ocr-path').value = f; }
-  });
-  $('ocr-win-link')?.addEventListener('click', e => {
-    e.preventDefault();
-    window.api.openUrl('https://github.com/UB-Mannheim/tesseract/wiki');
-  });
-  refreshOcrStatus();
 
   // Drag & drop
   const dz = $('dropzone');
@@ -128,10 +118,6 @@ function attachEvents() {
   document.querySelectorAll('.settings-section[data-acc] .acc-header').forEach(h => {
     h.addEventListener('click', () => h.parentElement.classList.toggle('open'));
   });
-  // Group-level collapse: click group header to hide/show all its sections.
-  document.querySelectorAll('.settings-group-header').forEach(h => {
-    h.addEventListener('click', () => h.parentElement.classList.toggle('collapsed'));
-  });
 }
 
 function subscribeEvents() {
@@ -139,9 +125,6 @@ function subscribeEvents() {
   window.api.on('progress',       pct => setProgress(pct));
   window.api.on('merge-complete', ({ output }) => onMergeComplete(output));
   window.api.on('merge-error',    msg => onMergeError(msg));
-  window.api.on('ocr-progress',   ({ trackId, progress }) => {
-    addLog(`OCR track ${trackId}: ${progress}%`, 'info');
-  });
 }
 
 // ── View management ───────────────────────────────────────────────────────────
@@ -301,10 +284,10 @@ function renderSources() {
     else status = `<span class="source-status">${src.tracks.length} tracks</span>`;
 
     const tracks = src.tracks || [];
-    const vid = tracks.find(t => t.type === 'video');
-    const audios = tracks.filter(t => t.type === 'audio');
-    const subs   = tracks.filter(t => t.type === 'subtitles');
-    const videoLabel = vid ? `${vid.codec}${vid.pixelDimensions ? ' · ' + vid.pixelDimensions : ''}` : 'No video';
+    const vid = tracks.find(t => t.role === 'video');
+    const audios = tracks.filter(t => t.role === 'audio');
+    const subs   = tracks.filter(t => t.role === 'subtitles');
+    const videoLabel = vid ? `${vid.codec}${vid.width ? ' · ' + vid.width + 'x' + vid.height : ''}` : 'No video';
     const summaryParts = [];
     if (audios.length) summaryParts.push(`${audios.length} audio`);
     if (subs.length)   summaryParts.push(`${subs.length} sub`);
@@ -396,23 +379,11 @@ function renderPlanCard() {
     row.className = 'plan-row';
     const icon   = p.role === 'video' ? '🎬' : p.role === 'audio' ? '🔊' : '💬';
     const detail = p.role === 'video'
-      ? `${p.codec}${p.pixelDimensions ? ' · ' + p.pixelDimensions : ''}`
+      ? `${p.codec}${p.width ? ' · ' + p.width + 'x' + p.height : ''}`
       : `${p.codec}${p.channels ? ' · ' + p.channels + 'ch' : ''}${p.lang ? ' · ' + p.lang : ''}`;
-    let typeBadge = '';
-    if (p.role === 'subtitles') {
-      if (p.variant === '_SDH' || p.trackType === 'sdh')
-        typeBadge = `<span class="variant-badge sdh">${t('lbl_sdh')}</span>`;
-      else if (p.variant === '_SIGNS' || p.trackType === 'signs')
-        typeBadge = `<span class="variant-badge signs">${t('lbl_signs')}</span>`;
-      else if (p.trackType === 'unknown')
-        typeBadge = `<span class="variant-badge unknown">⚑ ${t('lbl_unknown_type')}</span>`;
-      else if (p.forced)
-        typeBadge = `<span class="variant-badge forced">${t('lbl_forced')}</span>`;
-    }
     row.innerHTML = `
       <span class="plan-icon">${icon}</span>
       <span class="plan-lang">${esc(p.lang || 'und')}</span>
-      ${typeBadge}
       <span class="plan-detail">${esc(detail)}</span>
       <span class="plan-source">S${p.sourceIndex + 1}</span>
       ${p.newName ? `<span class="plan-name">${esc(p.newName)}</span>` : ''}`;
@@ -516,7 +487,7 @@ function buildTrackEditorList() {
       row.className = `te-row ${p.keep ? 'keep' : 'drop'}`;
 
       const detail = role === 'video'
-        ? `${p.codec}${p.pixelDimensions ? ' · ' + p.pixelDimensions : ''}`
+        ? `${p.codec}${p.width ? ' · ' + p.width + 'x' + p.height : ''}`
         : `${p.codec}${p.channels ? ' · ' + p.channels + 'ch' : ''}${p.name ? ' · ' + p.name : ''}`;
 
       row.innerHTML = `
@@ -684,8 +655,6 @@ function addLog(message, level = 'info', time) {
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
-const COMMON_CODECS = ['AC-3', 'E-AC-3', 'DTS', 'DTS-HD', 'TrueHD', 'PCM', 'FLAC', 'AAC'];
-
 const FIELD_TO_SETTING = {
   outputName:        'outputNameTemplate',
   folderName:        'folderNameTemplate',
@@ -717,18 +686,6 @@ function buildSettingsUI() {
     });
   }
 
-  // Codec toggle chips
-  const cp = $('codec-picker');
-  if (cp) {
-    cp.innerHTML = '';
-    COMMON_CODECS.forEach(c => {
-      const chip = document.createElement('button');
-      chip.className = 'chip'; chip.textContent = c; chip.dataset.codec = c;
-      chip.addEventListener('click', () => chip.classList.toggle('active'));
-      cp.appendChild(chip);
-    });
-  }
-
   document.querySelectorAll('.tpl-field').forEach(container => {
     buildTemplateField(container, container.dataset.field, container.dataset.vars);
   });
@@ -752,38 +709,12 @@ function buildTemplateField(container, fieldKey, varsType) {
     chipRow.appendChild(chip);
   });
 
-  if (varsType === 'file' || varsType === 'series') {
-    const rgChip = document.createElement('button');
-    rgChip.className = 'chip var-chip lang-picker-chip';
-    rgChip.textContent = '{rg_…}';
-    rgChip.title = t('rg_chip_title');
-    rgChip.addEventListener('click', async () => {
-      const name = await askText(t('rg_chip_title'), t('rg_chip_prompt'));
-      if (name) insertAtCursor(input, `{rg_${name}}`);
-    });
-    chipRow.appendChild(rgChip);
-  }
-
-  if (varsType === 'track' || varsType === 'audio' || varsType === 'subtitle') {
-    const langChip = document.createElement('button');
-    langChip.className = 'chip var-chip lang-picker-chip';
-    langChip.textContent = '{lang_…}';
-    langChip.title = t('pick_display_lang');
-    langChip.addEventListener('click', async () => {
-      const code = await pickLanguage();
-      if (code) insertAtCursor(input, `{lang_${code}}`);
-    });
-    chipRow.appendChild(langChip);
-  }
-
   const presetRow = document.createElement('div');
   presetRow.className = 'preset-row';
   const select = document.createElement('select');
   select.className = 'input';
-  const applyBtn = mkBtn(t('tpl_apply'), 'btn-secondary small');
-  const saveBtn  = mkBtn(t('preset_save_as'), 'btn-secondary small');
-  const delBtn   = mkBtn(t('preset_delete'), 'btn-secondary small');
-  presetRow.append(select, applyBtn, saveBtn, delBtn);
+  const applyBtn = mkBtn('Apply', 'btn-secondary small');
+  presetRow.append(select, applyBtn);
 
   const preview = document.createElement('div');
   preview.className = 'preview-name';
@@ -793,52 +724,13 @@ function buildTemplateField(container, fieldKey, varsType) {
 
   input.addEventListener('input', () => updateTplPreview(fieldKey));
   applyBtn.addEventListener('click', () => { input.value = select.value; updateTplPreview(fieldKey); });
-  saveBtn.addEventListener('click', () => savePreset(fieldKey));
-  delBtn.addEventListener('click', () => deletePreset(fieldKey));
 
-  refreshPresetOptions(fieldKey);
-}
-
-function refreshPresetOptions(fieldKey) {
-  const { select } = state.tplFields[fieldKey];
   const builtin = state.meta.builtinPresets?.[fieldKey] || [];
-  const user = (state.settings.userPresets && state.settings.userPresets[fieldKey]) || [];
-  select.innerHTML = '';
-  const add = (p, isUser) => {
+  builtin.forEach(p => {
     const o = document.createElement('option');
-    o.value = p.value;
-    o.textContent = (isUser ? '★ ' : '') + p.label;
-    o.dataset.user = isUser ? '1' : '0';
-    o.dataset.label = p.label;
+    o.value = p.value; o.textContent = p.label;
     select.appendChild(o);
-  };
-  builtin.forEach(p => add(p, false));
-  user.forEach(p => add(p, true));
-}
-
-async function savePreset(fieldKey) {
-  const { input } = state.tplFields[fieldKey];
-  const label = await askText(t('save_preset') || 'Save preset', t('preset_name') || 'Preset name:');
-  if (!label) return;
-  if (!state.settings.userPresets) state.settings.userPresets = {};
-  if (!state.settings.userPresets[fieldKey]) state.settings.userPresets[fieldKey] = [];
-  const arr = state.settings.userPresets[fieldKey];
-  const existing = arr.findIndex(p => p.label === label);
-  if (existing >= 0) arr[existing].value = input.value;
-  else arr.push({ label, value: input.value });
-  await window.api.saveSettings({ userPresets: state.settings.userPresets });
-  refreshPresetOptions(fieldKey);
-}
-
-async function deletePreset(fieldKey) {
-  const { select } = state.tplFields[fieldKey];
-  const opt = select.options[select.selectedIndex];
-  if (!opt || opt.dataset.user !== '1') return;
-  const label = opt.dataset.label;
-  const arr = state.settings.userPresets?.[fieldKey] || [];
-  state.settings.userPresets[fieldKey] = arr.filter(p => p.label !== label);
-  await window.api.saveSettings({ userPresets: state.settings.userPresets });
-  refreshPresetOptions(fieldKey);
+  });
 }
 
 function updateTplPreview(fieldKey) {
@@ -864,8 +756,8 @@ function mediaCtxFromPlan(plan, filePath, title) {
 }
 
 function sampleCtx(varsType) {
-  if (varsType === 'audio')    return { lang: 'Español', iso2: 'es', iso3: 'spa', ISO2: 'ES', ISO3: 'SPA', codec: 'DTS-HD Master Audio', codec_short: 'DTS-HD MA', channels: '5.1', variant: 'LA', variant_label: 'Latin American', default: '' };
-  if (varsType === 'subtitle') return { lang: 'Español', iso2: 'es', iso3: 'spa', ISO2: 'ES', ISO3: 'SPA', codec: 'SubRip/SRT', forced: 'Forced', variant: 'LA', variant_label: 'Latin American', default: '' };
+  if (varsType === 'audio')    return { lang: 'spa', codec: 'E-AC-3', channels: '5.1', variant_label: '', codec_short: 'EAC3' };
+  if (varsType === 'subtitle') return { lang: 'eng', codec: 'SubRip/SRT', variant_label: '', forced: '' };
   const plan = state.plan?.plan || [];
   const si   = state.plan?.videoSourceIndex ?? 0;
   const pFile = state.sources[si]?.file || '';
@@ -876,16 +768,9 @@ function sampleCtx(varsType) {
   return { title: 'Movie Title', year: '2024', title_year: 'Movie Title (2024)', filename: 'movie.file', ...med };
 }
 
-function _displayName(code, displayLang) {
-  try { const n = new Intl.DisplayNames([displayLang], { type: 'language' }).of(code); return n ? n.charAt(0).toUpperCase() + n.slice(1) : ''; }
-  catch (_) { return ''; }
-}
-
 function renderSample(tpl, ctx) {
   if (!tpl) return '(empty)';
-  let out = tpl.replace(/\{rg_([^}]+)\}/g, (_, name) => name);
-  out = out.replace(/\{lang_([a-z]{2,3})\}/g, (m, dl) => _displayName('es', dl) || m);
-  return out.replace(/\{(\w+)\}/g, (_, k) => ctx?.[k] !== undefined ? ctx[k] : `{${k}}`);
+  return tpl.replace(/\{(\w+)\}/g, (_, k) => ctx?.[k] !== undefined ? ctx[k] : `{${k}}`);
 }
 
 function populateSettings() {
@@ -900,20 +785,10 @@ function populateSettings() {
   c('setting-fetch-episode',   s.fetchEpisodeTitle);
   c('setting-series-folders',  s.seriesCreateFolders);
   v('setting-audio-langs',     s.audioLangs);
-  { const saved = (s.audioCodecs || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
-    document.querySelectorAll('#codec-picker .chip').forEach(ch => ch.classList.toggle('active', saved.length > 0 && saved.includes(ch.dataset.codec.toLowerCase()))); }
+  v('setting-audio-codecs',    s.audioCodecs);
   c('setting-one-audio',       s.oneAudioPerLang);
   v('setting-sub-langs',       s.subLangs);
   c('setting-one-sub',         s.oneSubPerLang);
-  c('setting-include-normal',  s.includeNormalSubs  !== false);
-  c('setting-include-forced',  s.includeForcedSubs  !== false);
-  c('setting-include-sdh',     s.includeSdh);
-  c('setting-include-signs',          s.includeSigns);
-  c('setting-include-commentary',     s.includeCommentary);
-  c('setting-include-accessibility',  s.includeAccessibility);
-  c('setting-include-unknown',        s.includeUnknownSubs !== false);
-  c('setting-ocr-enabled',     s.ocrEnabled);
-  v('setting-ocr-path',        s.ocrPath);
   c('setting-imdb-tag',        s.writeImdbTag);
   c('setting-imdb-folder',     s.imdbInFolder);
   c('setting-embed-cover',     s.embedCoverArt);
@@ -954,19 +829,10 @@ async function saveSettings() {
   s.fetchEpisodeTitle   = c('setting-fetch-episode');
   s.seriesCreateFolders = c('setting-series-folders');
   s.audioLangs          = v('setting-audio-langs');
-  s.audioCodecs         = [...document.querySelectorAll('#codec-picker .chip.active')].map(ch => ch.dataset.codec).join(', ');
+  s.audioCodecs         = v('setting-audio-codecs');
   s.oneAudioPerLang     = c('setting-one-audio');
   s.subLangs            = v('setting-sub-langs');
   s.oneSubPerLang       = c('setting-one-sub');
-  s.includeNormalSubs   = c('setting-include-normal');
-  s.includeForcedSubs   = c('setting-include-forced');
-  s.includeSdh          = c('setting-include-sdh');
-  s.includeSigns           = c('setting-include-signs');
-  s.includeCommentary      = c('setting-include-commentary');
-  s.includeAccessibility   = c('setting-include-accessibility');
-  s.includeUnknownSubs     = c('setting-include-unknown');
-  s.ocrEnabled          = c('setting-ocr-enabled');
-  s.ocrPath             = v('setting-ocr-path').trim();
   s.writeImdbTag        = c('setting-imdb-tag');
   s.imdbInFolder        = c('setting-imdb-folder');
   s.embedCoverArt       = c('setting-embed-cover');
@@ -979,8 +845,6 @@ async function saveSettings() {
     const f = state.tplFields[fieldKey];
     if (f) s[settingKey] = f.input.value;
   }
-
-  s.userPresets = state.settings.userPresets || {};
 
   await window.api.saveSettings(s);
   Object.assign(state.settings, s);
@@ -999,34 +863,6 @@ function toggleSeriesFolders() {
   $('series-show-folder-row')?.classList.toggle('hidden', !on);
   $('series-season-folder-row')?.classList.toggle('hidden', !on);
 }
-async function refreshOcrStatus() {
-  const st = await window.api.getOcrStatus();
-  const tess = st?.tesseract;
-  const setBadge = (id, ok, label) => {
-    const el = $(id);
-    if (!el) return;
-    el.textContent = (ok ? '✓ ' : '✗ ') + label;
-    el.className = 'status-badge ' + (ok ? 'ok' : 'error');
-  };
-  setBadge('ocr-status-tesseract', tess?.installed,
-    tess?.installed ? `${t('ocr_tesseract_ok')} ${tess.version || ''}` : t('ocr_tesseract_missing'));
-  if (st?.pgsrip?.installed)
-    setBadge('ocr-status-pgsrip', true, t('ocr_pgsrip_ok'));
-  else if ($('ocr-status-pgsrip')) $('ocr-status-pgsrip').textContent = '';
-  if (st?.pgsocr?.installed)
-    setBadge('ocr-status-pgsocr', true, t('ocr_pgsocr_ok'));
-  else if ($('ocr-status-pgsocr')) $('ocr-status-pgsocr').textContent = '';
-  const gpuEl = $('ocr-status-gpu');
-  if (gpuEl) {
-    if (st?.gpu?.type) { gpuEl.textContent = '✓ ' + t('ocr_gpu_available') + (st.gpu.name ? ` (${st.gpu.name})` : ''); gpuEl.className = 'status-badge ok'; }
-    else { gpuEl.textContent = t('ocr_gpu_none'); gpuEl.className = 'status-badge muted'; }
-  }
-  const langsEl = $('ocr-langs-text');
-  if (langsEl) langsEl.textContent = tess?.langs?.length ? tess.langs.join(', ') : '—';
-  const installCard = $('ocr-install-card');
-  if (installCard) installCard.classList.toggle('hidden', !!tess?.installed);
-}
-
 function toggleJellyfin() {
   const on = $('setting-jellyfin-enabled')?.checked;
   $('jellyfin-fields')?.classList.toggle('hidden', !on);
@@ -1042,68 +878,6 @@ function insertAtCursor(input, text) {
   input.value = v.slice(0, s) + text + v.slice(e);
   input.selectionStart = input.selectionEnd = s + text.length;
   input.dispatchEvent(new Event('input'));
-}
-
-function pickLanguage() {
-  return new Promise(resolve => {
-    const list = $('langpick-list');
-    const search = $('langpick-search');
-    const render = (filter = '') => {
-      const f = filter.toLowerCase();
-      list.innerHTML = '';
-      const langs = (state.meta.allLangs || []).filter(l =>
-        !f || l.en.toLowerCase().includes(f) || l.native.toLowerCase().includes(f) || l.iso2.includes(f) || l.iso3.includes(f)
-      );
-      langs.forEach(l => {
-        const item = document.createElement('div');
-        item.className = 'langpick-item';
-        item.innerHTML = `<span class="lp-native">${esc(l.native)}</span><span class="lp-en">${esc(l.en)}</span><span class="lp-code">${l.iso2}</span>`;
-        item.addEventListener('click', () => { cleanup(); resolve(l.iso2); });
-        list.appendChild(item);
-      });
-      if (!langs.length) list.innerHTML = `<div class="muted-pad">${t('no_matches')}</div>`;
-    };
-    const onSearch = () => render(search.value);
-    const onClose = () => { cleanup(); resolve(null); };
-    const cleanup = () => {
-      $('view-langpick').classList.add('hidden');
-      search.removeEventListener('input', onSearch);
-      $('langpick-close').removeEventListener('click', onClose);
-    };
-    search.value = '';
-    render('');
-    $('view-langpick').classList.remove('hidden');
-    setTimeout(() => search.focus(), 50);
-    search.addEventListener('input', onSearch);
-    $('langpick-close').addEventListener('click', onClose);
-  });
-}
-
-function askText(title, label, initial = '') {
-  return new Promise(resolve => {
-    $('asktext-title').textContent = title;
-    $('asktext-label').textContent = label;
-    const input = $('asktext-input');
-    input.value = initial;
-    $('view-asktext').classList.remove('hidden');
-    setTimeout(() => input.focus(), 50);
-
-    const cleanup = () => {
-      $('view-asktext').classList.add('hidden');
-      okBtn.removeEventListener('click', onOk);
-      cancelBtn.removeEventListener('click', onCancel);
-      input.removeEventListener('keydown', onKey);
-    };
-    const onOk = () => { const v = input.value.trim(); cleanup(); resolve(v || null); };
-    const onCancel = () => { cleanup(); resolve(null); };
-    const onKey = e => { if (e.key === 'Enter') onOk(); if (e.key === 'Escape') onCancel(); };
-
-    const okBtn = $('asktext-ok');
-    const cancelBtn = $('asktext-cancel');
-    okBtn.addEventListener('click', onOk);
-    cancelBtn.addEventListener('click', onCancel);
-    input.addEventListener('keydown', onKey);
-  });
 }
 function sanitizeFilename(s) {
   return (s || 'output').replace(/[/\\:*?"<>|]/g, '').trim() || 'output';

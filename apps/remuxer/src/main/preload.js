@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
@@ -15,16 +15,19 @@ contextBridge.exposeInMainWorld('api', {
   processBatch: (items) => ipcRenderer.invoke('process-batch', items),
   cancel: () => ipcRenderer.invoke('cancel'),
 
-  // Tools & MakeMKV
+  // Tools, MakeMKV & OCR
   getToolsStatus: () => ipcRenderer.invoke('get-tools-status'),
+  getOcrStatus:   (p) => ipcRenderer.invoke('get-ocr-status', p),
+  ocrConvert:     (args) => ipcRenderer.invoke('ocr-convert', args),
   openUrl: (url) => ipcRenderer.invoke('open-url', url),
   scanDisc: () => ipcRenderer.invoke('scan-disc'),
   ripTitle: (args) => ipcRenderer.invoke('rip-title', args),
   cancelRip: () => ipcRenderer.invoke('cancel-rip'),
+  getFilePath: (file) => webUtils.getPathForFile(file),
 
   on: (channel, cb) => {
     const allowed = ['log', 'progress', 'item-done', 'batch-complete',
-                     'rip-started', 'rip-progress', 'rip-complete', 'rip-failed'];
+                     'rip-started', 'rip-progress', 'rip-complete', 'rip-failed', 'ocr-progress'];
     if (allowed.includes(channel)) {
       const sub = (_, ...a) => cb(...a);
       ipcRenderer.on(channel, sub);

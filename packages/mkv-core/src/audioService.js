@@ -23,17 +23,35 @@ function qualityScore(track) {
   return codecRank(track.codec) * 1000 + ch * 10;
 }
 
+function subCodecScore(codec) {
+  const c = (codec || '').toUpperCase();
+  if (c.includes('SRT') || c.includes('SUBRIP')) return 3;
+  if (c.includes('ASS') || c.includes('SSA'))    return 2;
+  if (c.includes('PGS') || c.includes('HDMV'))   return 1;
+  if (c.includes('VOBSUB') || c.includes('DVDSUB')) return 0;
+  return 1;
+}
+
 /**
  * Keep only the best-quality track per language among the currently-kept ones.
- * For subtitles, forced tracks are kept separately and never compete.
+ * For subtitles, forced tracks compete only among themselves (separate bucket per lang).
+ * Special-type subtitle tracks (SDH, Signs…) are grouped per type+lang, not mixed with normal.
  * Marks dropped duplicates with dropReason='duplicate' and the winner with bestOfLang=true.
  */
 function dedupeBestPerLang(plan, role, isSubtitle) {
   const groups = {};
   for (const p of plan) {
     if (p.role !== role || !p.keep) continue;
-    if (isSubtitle && p.forced) continue;
-    const key = (p.variant && !p.variant.startsWith('_')) ? p.variant : toIso3(p.lang);
+    let key;
+    if (p.variant && !p.variant.startsWith('_')) {
+      key = p.variant;
+    } else if (p.variant && p.variant.startsWith('_')) {
+      key = `${p.variant}:${toIso3(p.lang)}`;
+    } else {
+      key = toIso3(p.lang);
+    }
+    // Forced tracks compete only among themselves — separate bucket
+    if (isSubtitle && p.forced) key = `forced:${key}`;
     (groups[key] = groups[key] || []).push(p);
   }
   for (const key of Object.keys(groups)) {
@@ -42,6 +60,8 @@ function dedupeBestPerLang(plan, role, isSubtitle) {
     let winner = group[0];
     if (!isSubtitle) {
       for (const g of group) if (qualityScore(g) > qualityScore(winner)) winner = g;
+    } else {
+      for (const g of group) if (subCodecScore(g.codec) > subCodecScore(winner.codec)) winner = g;
     }
     for (const g of group) {
       if (g === winner) { g.bestOfLang = true; }
@@ -128,7 +148,7 @@ function renderName(template, track) {
 }
 
 module.exports = {
-  codecRank, qualityScore, dedupeBestPerLang,
+  codecRank, qualityScore, subCodecScore, dedupeBestPerLang,
   parseList, matchesLang, matchesCodec,
   cleanCodec, shortCodec, chLayout, renderName,
 };

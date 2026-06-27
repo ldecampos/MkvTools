@@ -255,15 +255,18 @@
       </header>
       <div class="settings-body">
 
-        <div class="settings-section" data-acc>
-          <h3 class="acc-header" data-i18n="sec_interface">Interface</h3>
-          <div class="acc-body">
+        <div class="settings-group collapsed">
+          <div class="settings-group-header" data-i18n="sec_interface">Interface</div>
+          <div class="settings-section">
             <div class="setting-row">
               <label data-i18n="interface_language">Interface language</label>
               <select id="setting-ui-lang" class="input"></select>
             </div>
           </div>
         </div>
+
+        <div class="settings-group collapsed">
+          <div class="settings-group-header" data-i18n="grp_naming">Naming &amp; Paths</div>
 
         <div class="settings-section" data-acc>
           <h3 class="acc-header" data-i18n="sec_output">Output</h3>
@@ -323,25 +326,18 @@
               <p class="setting-card-header" data-i18n="card_folder">Folder</p>
               <label class="check-row"><input type="checkbox" id="setting-fetch-episode"><span data-i18n="fetch_episode">Fetch episode titles from TMDb</span></label>
               <label class="check-row"><input type="checkbox" id="setting-series-folders"><span data-i18n="series_create_folders">Create Series / Season folders (Jellyfin layout)</span></label>
-              <div class="setting-indent" id="series-show-folder-row">
-                <div class="setting-row">
-                  <label data-i18n="series_show_folder">Series folder template</label>
-                  <div class="tpl-field" data-field="seriesShowFolder" data-vars="series"></div>
-                </div>
-              </div>
-              <div class="setting-indent" id="series-season-folder-row">
-                <div class="setting-row">
-                  <label data-i18n="series_season_folder">Season folder template</label>
-                  <div class="tpl-field" data-field="seriesSeasonFolder" data-vars="series"></div>
-                </div>
-              </div>
+            </div>
+            <div class="setting-card hidden" id="series-show-folder-row">
+              <p class="setting-card-header" data-i18n="series_show_folder">Series folder</p>
+              <div class="tpl-field" data-field="seriesShowFolder" data-vars="series"></div>
+            </div>
+            <div class="setting-card hidden" id="series-season-folder-row">
+              <p class="setting-card-header" data-i18n="series_season_folder">Season folder</p>
+              <div class="tpl-field" data-field="seriesSeasonFolder" data-vars="series"></div>
             </div>
             <div class="setting-card">
               <p class="setting-card-header" data-i18n="card_filename">Filename</p>
-              <div class="setting-row">
-                <label data-i18n="series_output">Episode filename template</label>
-                <div class="tpl-field" data-field="seriesOutputName" data-vars="series"></div>
-              </div>
+              <div class="tpl-field" data-field="seriesOutputName" data-vars="series"></div>
             </div>
             <div class="setting-card">
               <p class="setting-card-header" data-i18n="card_title">Internal title</p>
@@ -356,6 +352,11 @@
           </div>
         </div>
 
+        </div><!-- /settings-group: Naming & Paths -->
+
+        <div class="settings-group collapsed">
+          <div class="settings-group-header" data-i18n="grp_content">File Content</div>
+
         <div class="settings-section" data-acc>
           <h3 class="acc-header" data-i18n="sec_audio">Audio</h3>
           <div class="acc-body">
@@ -367,8 +368,7 @@
               </div>
               <div class="setting-row">
                 <label><span data-i18n="allowed_codecs">Allowed codecs</span> <span class="hint-inline" data-i18n="empty_all">(empty = all)</span></label>
-                <input type="text" id="setting-audio-codecs" class="input" placeholder="(all)">
-                <div class="chip-row" id="codec-suggestions"></div>
+                <div class="chip-row" id="codec-picker"></div>
               </div>
               <label class="check-row"><input type="checkbox" id="setting-one-audio"><span data-i18n="one_audio">Only one audio track per language (or variant)</span></label>
             </div>
@@ -394,6 +394,16 @@
               <label class="check-row"><input type="checkbox" id="setting-one-sub"><span data-i18n="one_sub">Only one subtitle track per language (keeps forced separately)</span></label>
             </div>
             <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_subtitle_types">Subtitle types to include</p>
+              <label class="check-row"><input type="checkbox" id="setting-include-normal"><span data-i18n="lbl_include_normal">Normal subtitles</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-forced"><span data-i18n="lbl_include_forced">Forced subtitles</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-sdh"><span data-i18n="lbl_include_sdh">SDH (Subtitles for the Deaf and Hard-of-hearing)</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-signs"><span data-i18n="lbl_include_signs">Signs &amp; Songs (foreign text only)</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-commentary"><span data-i18n="lbl_include_commentary">Commentary</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-accessibility"><span data-i18n="lbl_include_accessibility">Accessibility (audio description)</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-unknown"><span data-i18n="lbl_include_unknown">Unknown type (unclassified tracks)</span></label>
+            </div>
+            <div class="setting-card">
               <p class="setting-card-header" data-i18n="card_track_names">Track names</p>
               <div class="setting-row">
                 <label data-i18n="track_name_template">Track name template</label>
@@ -412,8 +422,16 @@
             <div class="setting-row">
               <label class="check-row"><input type="checkbox" id="setting-imdb-folder"><span data-i18n="imdb_folder">Add [imdbid-ttXXXX] to the folder name (best for Jellyfin matching)</span></label>
             </div>
+            <div class="setting-row">
+              <label class="check-row"><input type="checkbox" id="setting-embed-cover"><span data-i18n="embed_cover">Embed cover art (poster) inside the MKV</span></label>
+            </div>
           </div>
         </div>
+
+        </div><!-- /settings-group: File Content -->
+
+        <div class="settings-group collapsed">
+          <div class="settings-group-header" data-i18n="grp_services">External Services</div>
 
         <div class="settings-section" data-acc>
           <h3 class="acc-header" data-i18n="sec_tmdb">TMDb</h3>
@@ -457,6 +475,48 @@
             </div>
           </div>
         </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_ocr">Subtitle OCR (PGS → SRT)</h3>
+          <div class="acc-body">
+            <p class="hint" data-i18n="ocr_hint">Convert Blu-ray image-based subtitles (PGS) to text (SRT). Requires Tesseract OCR.</p>
+            <label class="check-row"><input type="checkbox" id="setting-ocr-enabled"><span data-i18n="lbl_ocr_enabled">Enable PGS subtitle conversion to SRT</span></label>
+            <div id="ocr-fields">
+              <div class="setting-row">
+                <label data-i18n="ocr_status_label">Status</label>
+                <div class="ocr-status-row">
+                  <span id="ocr-status-tesseract" class="status-badge"></span>
+                  <span id="ocr-status-pgsrip" class="status-badge"></span>
+                  <span id="ocr-status-pgsocr" class="status-badge"></span>
+                  <span id="ocr-status-gpu" class="status-badge"></span>
+                  <button class="btn-secondary small" id="btn-ocr-check" data-i18n="ocr_check_again">Check again</button>
+                </div>
+              </div>
+              <div class="setting-row" id="ocr-langs-row">
+                <label data-i18n="ocr_langs_label">Available languages</label>
+                <span id="ocr-langs-text" class="muted"></span>
+              </div>
+              <div class="setting-row">
+                <label data-i18n="lbl_ocr_path">Tesseract path (optional)</label>
+                <div class="path-row">
+                  <input type="text" id="setting-ocr-path" class="input" data-i18n-ph="ocr_path_hint">
+                  <button class="btn-secondary" id="btn-choose-ocr-path" data-i18n="browse">Browse...</button>
+                </div>
+              </div>
+              <div class="setting-card" id="ocr-install-card">
+                <p class="setting-card-header" data-i18n="ocr_install_title">Install Tesseract OCR</p>
+                <p class="hint" data-i18n="ocr_install_mac">macOS (Homebrew):</p>
+                <code class="code-block" data-i18n="ocr_install_mac_cmd">brew install tesseract tesseract-lang</code>
+                <p class="hint" data-i18n="ocr_install_win">Windows:</p>
+                <a href="#" id="ocr-win-link" data-i18n="ocr_install_win_link">Download from UB Mannheim →</a>
+                <p class="hint" data-i18n="ocr_install_advanced">Advanced (better accuracy for non-Latin scripts):</p>
+                <code class="code-block" data-i18n="ocr_install_advanced_cmd">pip install pgsrip   # CPU / pip install pgsocr[lm]  # GPU</code>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        </div><!-- /settings-group: External Services -->
 
         <div class="settings-footer">
           <button class="btn-primary" id="btn-save-settings" data-i18n="save_settings">Save Settings</button>

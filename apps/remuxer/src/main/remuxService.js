@@ -1,7 +1,9 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
-const { findMkvmerge } = require('@mkv-tools/core/src/mkvmergeService');
+const path = require('path');
+const { findMkvmerge, buildMatroskaFlagArgs } = require('@mkv-tools/core/src/mkvmergeService');
 const { writeTagsFile } = require('@mkv-tools/core/src/tagsService');
+const { downloadPoster } = require('@mkv-tools/core/src/posterService');
 
 let activeProcess = null;
 
@@ -12,7 +14,7 @@ const remuxService = {
   planTracks: require('@mkv-tools/core/src/mkvmergeService').planTracks,
 
   /** Produce the output MKV in one mkvmerge pass. */
-  async produce({ input, output, plan, fileTitle, movie, writeImdbTag, onProgress, onLog }) {
+  async produce({ input, output, plan, fileTitle, movie, writeImdbTag, embedCoverArt, onProgress, onLog }) {
     const mkvmerge = findMkvmerge();
     const kept = plan.filter(p => p.keep);
     const video = kept.filter(p => p.role === 'video');
@@ -20,7 +22,7 @@ const remuxService = {
     const subs  = kept.filter(p => p.role === 'subtitles');
     if (video.length === 0) throw new Error('No video track selected');
 
-    const args = ['--output', output, '--no-buttons', '--no-attachments',
+    const args = ['--gui-mode', '--output', output, '--no-buttons', '--no-attachments',
                   '--disable-track-statistics-tags'];
 
     let tagsFile = null;
@@ -29,6 +31,22 @@ const remuxService = {
       args.push('--no-global-tags', '--global-tags', tagsFile);
     } else {
       args.push('--no-global-tags');
+    }
+
+    // Cover art attachment
+    let posterFile = null;
+    if (embedCoverArt && movie?.posterPath) {
+      posterFile = await downloadPoster(movie.posterPath);
+      if (posterFile) {
+        const ext  = path.extname(posterFile).toLowerCase();
+        const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
+        args.push('--attachment-name', 'cover' + ext,
+                  '--attachment-mime-type', mime,
+                  '--attach-file', posterFile);
+        onLog?.(`Cover art attached (${path.basename(posterFile)})`);
+      } else {
+        onLog?.('Cover art: download failed, skipping.');
+      }
     }
 
     if (fileTitle && fileTitle.length) args.push('--title', fileTitle);
@@ -55,6 +73,9 @@ const remuxService = {
       args.push('--forced-display-flag', `${t.id}:${t.forced ? 'yes' : 'no'}`);
     });
 
+    // Write Matroska RFC 9559 type flags so detection is cached in the output file
+    args.push(...buildMatroskaFlagArgs([...audio, ...subs]));
+
     args.push('--no-track-tags');
     args.push(input);
 
@@ -62,7 +83,8 @@ const remuxService = {
     try {
       await runWithProgress(mkvmerge, args, onProgress, onLog);
     } finally {
-      if (tagsFile) { try { fs.unlinkSync(tagsFile); } catch (_) {} }
+      if (tagsFile)   { try { fs.unlinkSync(tagsFile);   } catch (_) {} }
+      if (posterFile) { try { fs.unlinkSync(posterFile); } catch (_) {} }
     }
     return output;
   },
@@ -72,7 +94,7 @@ const remuxService = {
 
 function runWithProgress(bin, args, onProgress, onLog) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(bin, ['--gui-mode', ...args]);
+    const proc = spawn(bin, args);
     activeProcess = proc;
     let stderr = '';
     proc.stdout.on('data', d => {

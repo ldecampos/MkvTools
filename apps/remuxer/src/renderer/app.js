@@ -150,7 +150,10 @@ function attachEvents() {
     e.preventDefault();
     dz.classList.remove('dragover');
     const paths = [];
-    for (const f of e.dataTransfer.files) if (f.path) paths.push(f.path);
+    for (const f of e.dataTransfer.files) {
+      const p = window.api.getFilePath(f);
+      if (p) paths.push(p);
+    }
     if (paths.length) enqueueFiles(paths);
   });
 }
@@ -524,9 +527,14 @@ function renderPreviewList() {
     let tag = '';
     if (p.manual) tag = `<span class="pv-tag manual">${t('lbl_manual')}</span>`;
     else if (p.bestOfLang) tag = `<span class="pv-tag best">★ ${t('best_quality')}</span>`;
-    else if (p.dropReason === 'duplicate') tag = `<span class="pv-tag dup">${t('lbl_duplicate')}</span>`;
-    else if (p.dropReason === 'accessibility') tag = `<span class="pv-tag ad">${t('lbl_accessibility')}</span>`;
-    else if (p.dropReason === 'commentary') tag = `<span class="pv-tag commentary">${t('lbl_commentary')}</span>`;
+    else if (p.dropReason === 'duplicate')       tag = `<span class="pv-tag dup">${t('lbl_duplicate')}</span>`;
+    else if (p.dropReason === 'accessibility')   tag = `<span class="pv-tag ad">${t('lbl_accessibility')}</span>`;
+    else if (p.dropReason === 'commentary')      tag = `<span class="pv-tag commentary">${t('lbl_commentary')}</span>`;
+    else if (p.dropReason === 'sdh_disabled')    tag = `<span class="pv-tag sdh">${t('lbl_sdh_disabled')}</span>`;
+    else if (p.dropReason === 'signs_disabled')  tag = `<span class="pv-tag signs">${t('lbl_signs_disabled')}</span>`;
+    else if (p.dropReason === 'normal_disabled') tag = `<span class="pv-tag dup">${t('lbl_normal_disabled')}</span>`;
+    else if (p.dropReason === 'forced_disabled') tag = `<span class="pv-tag dup">${t('lbl_forced_disabled')}</span>`;
+    else if (p.dropReason === 'unknown_disabled')tag = `<span class="pv-tag unknown">${t('lbl_unknown_disabled')}</span>`;
 
     // Variant badge
     let variantBadge = '';
@@ -537,6 +545,12 @@ function renderPreviewList() {
       variantBadge = `<span class="variant-badge ad" title="${t('lbl_accessibility')}">AD</span>`;
     } else if (p.variant === '_COMMENTARY') {
       variantBadge = `<span class="variant-badge commentary" title="${t('lbl_commentary')}">DIR</span>`;
+    } else if (p.variant === '_SDH') {
+      variantBadge = `<span class="variant-badge sdh" title="${t('lbl_sdh')}">${t('lbl_sdh')}</span>`;
+    } else if (p.variant === '_SIGNS') {
+      variantBadge = `<span class="variant-badge signs" title="${t('lbl_signs')}">${t('lbl_signs')}</span>`;
+    } else if (p.trackType === 'unknown') {
+      variantBadge = `<span class="variant-badge unknown" title="${t('lbl_unknown_type')}">⚑ ${t('lbl_unknown_type')}</span>`;
     } else if (isUnknownDup(p)) {
       variantBadge = `<span class="variant-badge unknown" title="${t('variant_unknown_tip')}">?</span>`;
     }
@@ -691,6 +705,8 @@ async function processBatch() {
   $('btn-process').classList.add('hidden');
   $('btn-cancel').classList.remove('hidden');
   $('overall-progress').classList.remove('hidden');
+  $('overall-bar').style.width = '0%';
+  $('overall-pct').textContent = '0%';
   const payload = items.map(i => ({ filePath: i.filePath, movie: i.movie, overrides: i.overrides || null, tmpDir: i.tmpDir || null, tracks: i.tracks || null }));
   await window.api.processBatch(payload);
 }
@@ -705,14 +721,14 @@ async function cancelBatch() {
 
 // ── Settings UI (with reusable template fields) ───────────────────────────────
 function buildSettingsUI() {
-  // Codec chips
-  const cs = $('codec-suggestions');
-  cs.innerHTML = '';
+  // Codec toggle chips
+  const cp = $('codec-picker');
+  cp.innerHTML = '';
   COMMON_CODECS.forEach(c => {
     const chip = document.createElement('button');
-    chip.className = 'chip'; chip.textContent = c;
-    chip.addEventListener('click', () => addCodec(c));
-    cs.appendChild(chip);
+    chip.className = 'chip'; chip.textContent = c; chip.dataset.codec = c;
+    chip.addEventListener('click', () => chip.classList.toggle('active'));
+    cp.appendChild(chip);
   });
 
   // Build each template field component
@@ -728,7 +744,10 @@ function buildSettingsUI() {
       header.parentElement.classList.toggle('open');
     });
   });
-  // Start with all sections collapsed
+  // Group-level collapse: click group header to hide/show all its sections.
+  document.querySelectorAll('.settings-group-header').forEach(h => {
+    h.addEventListener('click', () => h.parentElement.classList.toggle('collapsed'));
+  });
 }
 
 function buildTemplateField(container, fieldKey, varsType) {
@@ -767,6 +786,19 @@ function buildTemplateField(container, fieldKey, varsType) {
       if (code) insertAtCursor(input, `{lang_${code}}`);
     });
     chipRow.appendChild(langChip);
+  }
+
+  // Special chip for file/series fields: fixed release group → inserts {rg_NAME}
+  if (varsType === 'file' || varsType === 'series') {
+    const rgChip = document.createElement('button');
+    rgChip.className = 'chip var-chip lang-picker-chip';
+    rgChip.textContent = '{rg_…}';
+    rgChip.title = t('rg_chip_title');
+    rgChip.addEventListener('click', async () => {
+      const name = await askText(t('rg_chip_title'), t('rg_chip_prompt'));
+      if (name) insertAtCursor(input, `{rg_${name}}`);
+    });
+    chipRow.appendChild(rgChip);
   }
 
   // Preset manager
@@ -850,12 +882,31 @@ function updateTplPreview(fieldKey) {
   preview.textContent = t('example') + ' ' + renderSample(input.value, varsType, fileCtx);
 }
 
+const _VID_SHORT = {'V_MPEG4/ISO/AVC':'H.264','V_MPEGH/ISO/HEVC':'H.265','V_AV1':'AV1','V_MPEG2':'MPEG-2'};
+const _AUD_SHORT = {'A_DTS/MA':'DTS-HD MA','A_DTS':'DTS','A_EAC3':'E-AC3','A_AC3':'AC-3','A_TRUEHD':'TrueHD','A_FLAC':'FLAC','A_AAC':'AAC','A_OPUS':'Opus'};
+const _SRC_PAT   = [[/\bremux\b/i,'BluRay REMUX'],[/\bblu-?ray\b/i,'BluRay'],[/\bweb-?dl\b/i,'WEB-DL'],[/\bweb-?rip\b/i,'WEBRip'],[/\bhdtv\b/i,'HDTV'],[/\bdvdrip\b/i,'DVDRip']];
+function _mRes(d){if(!d)return'';const[w,h]=d.split('x').map(Number);if(h>=2160||w>=3840)return'2160p';if(h>=1080||w>=1920)return'1080p';if(h>=720||w>=1280)return'720p';return h?`${h}p`:'';}
+function _mHdr(tr,pr){if(tr===16&&pr===9)return'HDR10';if(tr===16)return'HDR';if(tr===18)return'HLG';return'';}
+function _mCh(n){return n===8?'7.1':n===6?'5.1':n===2?'2.0':n===1?'1.0':n?`${n}ch`:'';}
+function mediaCtxFromPlan(plan, filePath, title) {
+  const fname = (filePath||'').split('/').pop().replace(/\.[^.]+$/,'');
+  const vid  = (plan||[]).find(p=>p.role==='video'&&p.keep);
+  const aud  = (plan||[]).filter(p=>p.role==='audio'&&p.keep).sort((a,b)=>(b.channels||0)-(a.channels||0))[0];
+  let rg='', m=/-([A-Za-z0-9]{2,12})(?:\.[a-z]{1,4})?$/.exec(fname);
+  if(m)rg=m[1]; else{m=/\[([A-Za-z0-9]{2,12})\](?:\.[a-z]{1,4})?$/.exec(fname);if(m)rg=m[1];}
+  let src=''; for(const[re,lbl]of _SRC_PAT){if(re.test(fname)){src=lbl;break;}}
+  return{resolution:_mRes(vid?.pixelDimensions),video_codec:_VID_SHORT[vid?.codec]||'',hdr:_mHdr(vid?.colorTransfer,vid?.colorPrimaries),audio_codec:_AUD_SHORT[aud?.codec]||'',audio_channels:_mCh(aud?.channels),release_group:rg,source:src,clean_title:(title||'').replace(/['"`:!?]/g,'').replace(/\s+/g,' ').trim()};
+}
+
+const _MEDIA_SAMPLE = { resolution:'1080p', video_codec:'H.265', hdr:'HDR10', audio_codec:'DTS-HD MA', audio_channels:'5.1', release_group:'GROUP', source:'BluRay' };
+
 // Build a file context from the first identified movie in the queue, if any
 function sampleFileCtx(kind) {
   const item = state.queue.find(i => i.movie && i.movie.title && (i.movie.type || 'movie') === kind);
   if (!item) return null;
   const m = item.movie;
   const filename = item.filePath.split('/').pop().replace(/\.[^.]+$/, '');
+  const med = mediaCtxFromPlan(item.plan, item.filePath, m.title);
   if (kind === 'series') {
     const pad = n => String(n || 0).padStart(2, '0');
     return {
@@ -863,14 +914,13 @@ function sampleFileCtx(kind) {
       season: String(m.season || 0), episode: String(m.episode || 0),
       season2: pad(m.season), episode2: pad(m.episode),
       sxxexx: `S${pad(m.season)}E${pad(m.episode)}`,
-      episode_title: m.episodeTitle || '', filename
+      episode_title: m.episodeTitle || '', filename, ...med,
     };
   }
   return {
-    title: m.title,
-    year: m.year || '',
+    title: m.title, year: m.year || '',
     title_year: m.year ? `${m.title} (${m.year})` : m.title,
-    filename
+    filename, ...med,
   };
 }
 
@@ -878,19 +928,14 @@ function renderSample(tpl, varsType, fileCtx) {
   if (!tpl) return '(empty)';
 
   if (varsType === 'track' || varsType === 'audio' || varsType === 'subtitle') {
-    // Sample track uses the interface language, so the example reads naturally
-    // in whatever language the user has the app set to.
-    const sampleLang = state.uiLang || 'en';
     const ctx = {
-      lang: nativeName(sampleLang),
-      iso2: sampleLang, iso3: toIso3Client(sampleLang),
-      ISO2: sampleLang.toUpperCase(), ISO3: toIso3Client(sampleLang).toUpperCase(),
+      lang: 'Español', iso2: 'es', iso3: 'spa', ISO2: 'ES', ISO3: 'SPA',
       codec: 'DTS-HD Master Audio', codec_short: 'DTS-HD MA', channels: '5.1',
       forced: varsType === 'subtitle' ? 'Forced' : '',
       default: '',
       variant: 'LA', variant_label: 'Latin American',
     };
-    let out = tpl.replace(/\{lang_([a-z]{2,3})\}/g, (m, dl) => displayName(sampleLang, dl) || m);
+    let out = tpl.replace(/\{lang_([a-z]{2,3})\}/g, (m, dl) => displayName('es', dl) || m);
     out = out.replace(/\{(\w+)\}/g, (m, k) => (k in ctx ? ctx[k] : m));
     return cleanup(out);
   }
@@ -899,15 +944,18 @@ function renderSample(tpl, varsType, fileCtx) {
     const ctx = fileCtx || {
       series: 'Breaking Bad', year: '2008', season: '1', episode: '5',
       season2: '01', episode2: '05', sxxexx: 'S01E05',
-      episode_title: 'Gray Matter', filename: 'breaking.bad.s01e05'
+      episode_title: 'Gray Matter', filename: 'breaking.bad.s01e05',
+      clean_title: 'Breaking Bad', ..._MEDIA_SAMPLE,
     };
-    let out = tpl.replace(/\{(\w+)\}/g, (m, k) => (k in ctx ? ctx[k] : m));
+    let out = tpl.replace(/\{rg_([^}]+)\}/g, (_, name) => name);
+    out = out.replace(/\{(\w+)\}/g, (m, k) => (k in ctx ? ctx[k] : m));
     return cleanup(out);
   }
 
   // File context: use the real movie if we have one, else placeholder
-  const ctx = fileCtx || { title: 'The Matrix', year: '1999', title_year: 'The Matrix (1999)', filename: 'the.matrix.1999.1080p' };
-  let out = tpl.replace(/\{(\w+)\}/g, (m, k) => (k in ctx ? ctx[k] : m));
+  const ctx = fileCtx || { title: 'The Matrix', year: '1999', title_year: 'The Matrix (1999)', filename: 'the.matrix.1999.1080p', clean_title: 'The Matrix', ..._MEDIA_SAMPLE };
+  let out = tpl.replace(/\{rg_([^}]+)\}/g, (_, name) => name);
+  out = out.replace(/\{(\w+)\}/g, (m, k) => (k in ctx ? ctx[k] : m));
   return cleanup(out);
 }
 
@@ -938,12 +986,6 @@ function insertAtCursor(input, text) {
   input.dispatchEvent(new Event('input'));
 }
 
-function addCodec(c) {
-  const el = $('setting-audio-codecs');
-  const cur = el.value.split(',').map(x => x.trim()).filter(Boolean);
-  if (!cur.some(x => x.toLowerCase() === c.toLowerCase())) cur.push(c);
-  el.value = cur.join(', ');
-}
 
 function populateSettings() {
   const s = state.settings;
@@ -951,11 +993,22 @@ function populateSettings() {
   $('setting-create-folder').checked = !!s.createFolder;
   $('setting-one-audio').checked = !!s.oneAudioPerLang;
   $('setting-one-sub').checked = !!s.oneSubPerLang;
+  $('setting-include-normal').checked  = s.includeNormalSubs  !== false;
+  $('setting-include-forced').checked  = s.includeForcedSubs  !== false;
+  $('setting-include-sdh').checked     = !!s.includeSdh;
+  $('setting-include-signs').checked         = !!s.includeSigns;
+  $('setting-include-commentary').checked    = !!s.includeCommentary;
+  $('setting-include-accessibility').checked = !!s.includeAccessibility;
+  $('setting-include-unknown').checked       = s.includeUnknownSubs !== false;
+  $('setting-ocr-enabled').checked     = !!s.ocrEnabled;
+  $('setting-ocr-path').value          = s.ocrPath || '';
   $('setting-imdb-tag').checked = !!s.writeImdbTag;
   $('setting-imdb-folder').checked = !!s.imdbInFolder;
+  $('setting-embed-cover').checked = !!s.embedCoverArt;
   $('setting-on-exists').value = s.onFileExists || 'rename';
   $('setting-audio-langs').value = s.audioLangs || '';
-  $('setting-audio-codecs').value = s.audioCodecs || '';
+  { const saved = (s.audioCodecs || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+    document.querySelectorAll('#codec-picker .chip').forEach(ch => ch.classList.toggle('active', saved.length > 0 && saved.includes(ch.dataset.codec.toLowerCase()))); }
   $('setting-sub-langs').value = s.subLangs || '';
   $('setting-tmdb-key').value = s.tmdbApiKey || '';
   updateTmdbKeyHint(s.tmdbApiKey || '');
@@ -990,10 +1043,8 @@ function toggleJellyfin() {
 }
 function toggleSeriesFolders() {
   const on = $('setting-series-folders').checked;
-  const showRow = $('series-show-folder-row');
-  const seasonRow = $('series-season-folder-row');
-  if (showRow) showRow.style.display = on ? '' : 'none';
-  if (seasonRow) seasonRow.style.display = on ? '' : 'none';
+  $('series-show-folder-row')?.classList.toggle('hidden', !on);
+  $('series-season-folder-row')?.classList.toggle('hidden', !on);
 }
 function toggleCustomTitle() {
   const row = $('movie-title-row');
@@ -1012,10 +1063,20 @@ async function saveSettings() {
     oneSubPerLang: $('setting-one-sub').checked,
     writeImdbTag: $('setting-imdb-tag').checked,
     imdbInFolder: $('setting-imdb-folder').checked,
+    embedCoverArt: $('setting-embed-cover').checked,
     onFileExists: $('setting-on-exists').value,
     audioLangs: $('setting-audio-langs').value,
-    audioCodecs: $('setting-audio-codecs').value,
+    audioCodecs: [...document.querySelectorAll('#codec-picker .chip.active')].map(ch => ch.dataset.codec).join(', '),
     subLangs: $('setting-sub-langs').value,
+    includeNormalSubs:  $('setting-include-normal')?.checked  !== false,
+    includeForcedSubs:  $('setting-include-forced')?.checked  !== false,
+    includeSdh:         !!$('setting-include-sdh')?.checked,
+    includeSigns:          !!$('setting-include-signs')?.checked,
+    includeCommentary:     !!$('setting-include-commentary')?.checked,
+    includeAccessibility:  !!$('setting-include-accessibility')?.checked,
+    includeUnknownSubs:    $('setting-include-unknown')?.checked !== false,
+    ocrEnabled: !!$('setting-ocr-enabled')?.checked,
+    ocrPath:    $('setting-ocr-path')?.value?.trim() || '',
     tmdbApiKey: $('setting-tmdb-key').value,
     ripTempPath: $('setting-rip-temp').value.trim(),
     jellyfinEnabled: $('setting-jellyfin-enabled').checked,
@@ -1172,6 +1233,38 @@ function refreshMakemkvSettingsUI() {
   }
 }
 
+async function refreshOcrStatus() {
+  const st = await window.api.getOcrStatus();
+  const tess = st?.tesseract;
+  const setBadge = (id, ok, label) => {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = (ok ? '✓ ' : '✗ ') + label;
+    el.className = 'status-badge ' + (ok ? 'ok' : 'error');
+  };
+  setBadge('ocr-status-tesseract', tess?.installed,
+    tess?.installed ? `${t('ocr_tesseract_ok')} ${tess.version || ''}` : t('ocr_tesseract_missing'));
+  if (st?.pgsrip?.installed)
+    setBadge('ocr-status-pgsrip', true, t('ocr_pgsrip_ok'));
+  else
+    $('ocr-status-pgsrip').textContent = '';
+  if (st?.pgsocr?.installed)
+    setBadge('ocr-status-pgsocr', true, t('ocr_pgsocr_ok'));
+  else
+    $('ocr-status-pgsocr').textContent = '';
+  const gpuEl = $('ocr-status-gpu');
+  if (gpuEl) {
+    if (st?.gpu?.type) { gpuEl.textContent = '✓ ' + t('ocr_gpu_available') + (st.gpu.name ? ` (${st.gpu.name})` : ''); gpuEl.className = 'status-badge ok'; }
+    else { gpuEl.textContent = t('ocr_gpu_none'); gpuEl.className = 'status-badge muted'; }
+  }
+  const langsEl = $('ocr-langs-text');
+  if (langsEl) {
+    langsEl.textContent = tess?.langs?.length ? tess.langs.join(', ') : '—';
+  }
+  const installCard = $('ocr-install-card');
+  if (installCard) installCard.classList.toggle('hidden', !!tess?.installed);
+}
+
 function attachMakemkvEvents() {
   $('btn-rip-disc').addEventListener('click', openRipDisc);
   $('btn-rip-disc-queue').addEventListener('click', openRipDisc);
@@ -1192,6 +1285,18 @@ function attachMakemkvEvents() {
 
   $('btn-makemkv-open-download').addEventListener('click', () =>
     window.api.openUrl('https://www.makemkv.com/download/'));
+
+  // OCR section
+  $('btn-ocr-check')?.addEventListener('click', refreshOcrStatus);
+  $('btn-choose-ocr-path')?.addEventListener('click', async () => {
+    const f = await window.api.chooseFolder();
+    if (f) { $('setting-ocr-path').value = f; }
+  });
+  $('ocr-win-link')?.addEventListener('click', e => {
+    e.preventDefault();
+    window.api.openUrl('https://github.com/UB-Mannheim/tesseract/wiki');
+  });
+  refreshOcrStatus();
 
   // Season/episode inputs refresh badges
   $('disc-series-season')?.addEventListener('input', renderTitleEpisodeBadges);

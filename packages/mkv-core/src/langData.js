@@ -100,6 +100,25 @@ const VARIANT_MAP = {
   // Special track types (language-independent)
   '_AD': { keywords: ['audio description','audio descript','(ad)','[ad]','descriptive','audiodescripcion','audiodescripción','dvs','visually impaired'], label: 'Audio Description', region: null },
   '_COMMENTARY': { keywords: ['commentary','comentario del director','filmmakers','cast commentary'], label: 'Commentary', region: null },
+  '_SDH': {
+    keywords: [
+      'sdh','hearing impaired','hard of hearing','hearing-impaired',
+      'para sordos','hipoacúsicos','hipoacusicos','para hipoacúsicos',
+      '[hi]','(hi)','for the deaf','closed caption','cc subtitles',
+      'subtitles for the deaf','malentendants','sourd','gehörlos','surdos'
+    ],
+    label: 'SDH',
+    region: null
+  },
+  '_SIGNS': {
+    keywords: [
+      'signs','signs & songs','signs and songs','signs/songs','signs+songs',
+      'letreros','carteles','forced signs','foreign parts','foreign only',
+      'solos letreros','solo letreros'
+    ],
+    label: 'Signs & Songs',
+    region: null
+  },
 };
 
 // Detect regional variant or special track type from track name.
@@ -110,10 +129,11 @@ function detectVariant(name, langCode) {
   const baseLang = toIso2(langCode);
 
   // Special track types first (language-independent)
-  for (const type of ['_AD', '_COMMENTARY']) {
+  const SPECIAL_TYPE_MAP = { _AD: 'accessibility', _COMMENTARY: 'commentary', _SDH: 'sdh', _SIGNS: 'signs' };
+  for (const type of ['_AD', '_COMMENTARY', '_SDH', '_SIGNS']) {
     const entry = VARIANT_MAP[type];
     if (entry.keywords.some(kw => lower.includes(kw))) {
-      return { variant: type, region: null, label: entry.label, trackType: type === '_AD' ? 'accessibility' : 'commentary' };
+      return { variant: type, region: null, label: entry.label, trackType: SPECIAL_TYPE_MAP[type] };
     }
   }
 

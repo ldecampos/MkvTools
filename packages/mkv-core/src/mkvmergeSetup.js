@@ -27,9 +27,17 @@ const BIN = process.platform === 'win32' ? 'mkvmerge.exe' : 'mkvmerge';
 
 // Binary shipped inside the app package (extraResources → resources/vendor/)
 function appBundledPath() {
-  if (!process.resourcesPath) return null;
-  const p = path.join(process.resourcesPath, 'vendor', BIN);
-  return fs.existsSync(p) ? p : null;
+  if (process.resourcesPath) {
+    const p = path.join(process.resourcesPath, 'vendor', BIN);
+    if (fs.existsSync(p)) return p;
+  }
+  // Dev: vendor/ sits next to the app's package.json (two levels up from this module)
+  const devPaths = [
+    path.join(__dirname, '../../../apps/merger/vendor', BIN),
+    path.join(__dirname, '../../../apps/remuxer/vendor', BIN),
+  ];
+  for (const p of devPaths) { if (fs.existsSync(p)) return p; }
+  return null;
 }
 
 // Binary previously downloaded by the app into userData/tools/
@@ -54,7 +62,7 @@ function findMkvmerge() {
     if (fs.existsSync(p)) return p;
   }
 
-  // 3. Try PATH
+  // 4. Try PATH
   try {
     const cmd = process.platform === 'win32' ? 'where mkvmerge' : 'which mkvmerge';
     const result = execSync(cmd, { encoding: 'utf8', stdio: ['pipe','pipe','pipe'] }).trim().split('\n')[0].trim();

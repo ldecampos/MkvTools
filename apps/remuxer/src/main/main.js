@@ -1,3 +1,4 @@
+'use strict';
 const { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker } = require('electron');
 const path = require('path');
 const os = require('os');
@@ -7,14 +8,15 @@ const { remuxService } = require('./remuxService');
 const { tmdbService } = require('@mkv-tools/core/src/tmdbService');
 const { jellyfinService } = require('@mkv-tools/core/src/jellyfinService');
 const { guessFromFilename } = require('@mkv-tools/core/src/filenameParser');
-const { FILE_VARIABLES, AUDIO_VARIABLES, SUBTITLE_VARIABLES, SERIES_VARIABLES, TRACK_VARIABLES, BUILTIN_PRESETS } = require('@mkv-tools/core/src/nameTemplate');
+const { FILE_VARIABLES, AUDIO_VARIABLES, SUBTITLE_VARIABLES, SERIES_VARIABLES, TRACK_VARIABLES, BUILTIN_PRESETS, renderTemplate, buildMediaCtx } = require('@mkv-tools/core/src/nameTemplate');
 const { ALL_LANGS, VARIANT_MAP, variantsForLang } = require('@mkv-tools/core/src/langData');
 const { getStrings, languageList, SUPPORTED } = require('./i18n');
 const mkvmergeSetup = require('@mkv-tools/core/src/mkvmergeSetup');
 const makemkvService = require('./makemkvService');
-const { renderTemplate } = require('@mkv-tools/core/src/nameTemplate');
 
-const store = createStore('.mkv-remuxer-settings.json');
+const ocrService = require('@mkv-tools/core/src/ocrService');
+// Settings file shared with Merger; migrates automatically from the old name on first run
+const store = createStore('.mkv-tools-settings.json', '.mkv-remuxer-settings.json');
 
 function detectOSLang() {
   try {
@@ -45,7 +47,15 @@ const DEFAULTS = {
   fetchEpisodeTitle: true,
   oneSubPerLang: false,
   oneAudioPerLang: false,
+  includeNormalSubs: true,
+  includeForcedSubs: true,
+  includeSdh: false,
+  includeSigns: false,
+  includeUnknownSubs: true,
+  ocrEnabled: false,
+  ocrPath: '',
   writeImdbTag: true,
+  embedCoverArt: false,
   imdbInFolder: false,
   onFileExists: 'rename',
   tmdbApiKey: '',
@@ -70,13 +80,6 @@ function unblockSleep() {
   sleepBlockerId = null;
 }
 
-app.whenReady().then(() => {
-  const toolsDir = path.join(app.getPath('userData'), 'tools');
-  fs.mkdirSync(toolsDir, { recursive: true });
-  mkvmergeSetup.setToolsDir(toolsDir);
-  makemkvService.setDataPath(app.getPath('userData'));
-});
-
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1000, height: 780, minWidth: 860, minHeight: 640,
@@ -86,7 +89,13 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  const toolsDir = path.join(app.getPath('userData'), 'tools');
+  fs.mkdirSync(toolsDir, { recursive: true });
+  mkvmergeSetup.setToolsDir(toolsDir);
+  makemkvService.setDataPath(app.getPath('userData'));
+  createWindow();
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
@@ -136,7 +145,7 @@ ipcMain.handle('analyze-file', async (_, filePath) => {
   if (guess.type === 'series') {
     if (guess.title) {
       try { candidates = await tmdbService.searchTV(guess.title, settings.tmdbApiKey); media = candidates[0] || null; }
-      catch (e) { console.warn('TMDb TV search failed:', e.message); }
+      catch (e) { sendLog(`TMDb: ${e.message}`, 'warn'); }
     }
     if (!media && guess.title) media = { id: null, type: 'series', title: guess.title, year: '', imdbId: null, posterPath: null };
     if (media) {
@@ -154,7 +163,7 @@ ipcMain.handle('analyze-file', async (_, filePath) => {
         candidates = await tmdbService.search(guess.title, settings.tmdbApiKey);
         if (guess.year) media = candidates.find(c => c.year === guess.year) || candidates[0] || null;
         else media = candidates[0] || null;
-      } catch (e) { console.warn('TMDb movie search failed:', e.message); }
+      } catch (e) { sendLog(`TMDb: ${e.message}`, 'warn'); }
     }
     if (!media && (guess.title || guess.year)) media = { id: null, type: 'movie', title: guess.title, year: guess.year, imdbId: null, posterPath: null };
   }
@@ -221,7 +230,16 @@ async function runBatch(items) {
     const isSeries = movie && movie.type === 'series';
     try {
       sendLog(`Processing: ${path.basename(filePath)}`, 'info');
-      let { output, fileTitle } = computeOutput(filePath, movie, settings, isSeries);
+
+      let tracks = item.tracks;
+      if (!tracks || !tracks.length) {
+        const info = await remuxService.identifyTracks(filePath, m => sendLog(m, 'info'));
+        tracks = info.tracks;
+      }
+      const plan = remuxService.planTracks(tracks, settings, item.overrides);
+      logPlan(plan);
+
+      let { output, fileTitle } = computeOutput(filePath, movie, settings, isSeries, plan);
       fs.mkdirSync(path.dirname(output), { recursive: true });
 
       const exists = () => fs.existsSync(output) || plannedOutputs.has(output);
@@ -241,17 +259,9 @@ async function runBatch(items) {
       }
       plannedOutputs.add(output);
 
-      let tracks = item.tracks;
-      if (!tracks || !tracks.length) {
-        const info = await remuxService.identifyTracks(filePath, m => sendLog(m, 'info'));
-        tracks = info.tracks;
-      }
-      const plan = remuxService.planTracks(tracks, settings, item.overrides);
-      logPlan(plan);
-
       await remuxService.produce({
         input: filePath, output, plan, fileTitle,
-        movie, writeImdbTag: settings.writeImdbTag,
+        movie, writeImdbTag: settings.writeImdbTag, embedCoverArt: settings.embedCoverArt,
         onProgress: p => sendProgress(filePath, Math.round(p * 100)),
         onLog: m => sendLog(m, 'info')
       });
@@ -285,8 +295,34 @@ ipcMain.handle('get-tools-status', async () => ({
   mkvmerge: mkvmergeSetup.getStatus(),
   makemkv: await makemkvService.getStatus(),
 }));
+ipcMain.handle('get-ocr-status', async () => {
+  const settings = getSettings();
+  return ocrService.getStatus(settings.ocrPath || '');
+});
+ipcMain.handle('ocr-convert', async (_, { filePath, trackId, lang }) => {
+  const settings = getSettings();
+  if (!settings.ocrEnabled) return { ok: false, error: 'OCR is disabled in settings' };
+  const mkvmergePath = remuxService.findMkvmerge();
+  try {
+    mainWindow?.webContents.send('ocr-progress', { trackId, progress: 0 });
+    const srt = await ocrService.convertPgsToSrt(filePath, trackId, {
+      mkvmergePath,
+      lang,
+      customTesseractPath: settings.ocrPath || '',
+    }, frac => {
+      const progress = Math.round((frac || 0) * 100);
+      mainWindow?.webContents.send('ocr-progress', { trackId, progress });
+    });
+    return { ok: true, srt };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
 ipcMain.handle('open-url', (_, url) => {
-  const safe = ['https://mkvtoolnix.download', 'https://www.makemkv.com', 'https://forum.makemkv.com'];
+  const safe = [
+    'https://mkvtoolnix.download', 'https://www.makemkv.com', 'https://forum.makemkv.com',
+    'https://www.themoviedb.org', 'https://github.com/UB-Mannheim/tesseract',
+  ];
   if (safe.some(s => url.startsWith(s))) shell.openExternal(url);
 });
 
@@ -338,28 +374,35 @@ async function runRip({ makemkvcon, discIndex, discTarget, titleId, tmpDir, medi
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function buildFileCtx(movie, filePath) {
+function buildFileCtx(movie, filePath, plan) {
   const filename = path.basename(filePath, path.extname(filePath));
   const title = movie?.title || filename;
   const year = movie?.year || '';
-  return { title, year, title_year: year ? `${title} (${year})` : title, filename };
+  return {
+    title, year,
+    title_year: year ? `${title} (${year})` : title,
+    filename,
+    ...buildMediaCtx(plan, filePath, title),
+  };
 }
-function buildSeriesCtx(movie, filePath) {
+function buildSeriesCtx(movie, filePath, plan) {
   const filename = path.basename(filePath, path.extname(filePath));
   const season = movie?.season || 0;
   const episode = movie?.episode || 0;
   const pad = n => String(n).padStart(2, '0');
+  const title = movie?.title || filename;
   return {
-    series: movie?.title || filename, year: movie?.year || '',
+    series: title, year: movie?.year || '',
     season: String(season), episode: String(episode),
     season2: pad(season), episode2: pad(episode),
     sxxexx: `S${pad(season)}E${pad(episode)}`,
-    episode_title: movie?.episodeTitle || '', filename
+    episode_title: movie?.episodeTitle || '', filename,
+    ...buildMediaCtx(plan, filePath, title),
   };
 }
-function computeOutput(filePath, movie, settings, isSeries) {
+function computeOutput(filePath, movie, settings, isSeries, plan) {
   if (isSeries) {
-    const ctx = buildSeriesCtx(movie, filePath);
+    const ctx = buildSeriesCtx(movie, filePath, plan);
     const outName = render(settings.seriesOutputNameTemplate || '{series} - {sxxexx}', ctx) || ctx.filename;
     let outDir = settings.outputPath;
     if (settings.seriesCreateFolders) {
@@ -371,7 +414,7 @@ function computeOutput(filePath, movie, settings, isSeries) {
     const fileTitle = settings.seriesCustomFileTitle ? render(settings.seriesFileTitleTemplate || '', ctx) : outName;
     return { output: path.join(outDir, sanitize(outName) + '.mkv'), fileTitle };
   }
-  const ctx = buildFileCtx(movie, filePath);
+  const ctx = buildFileCtx(movie, filePath, plan);
   const outName = render(settings.outputNameTemplate || '{title_year}', ctx) || ctx.filename;
   let outDir = settings.outputPath;
   if (settings.createFolder) {

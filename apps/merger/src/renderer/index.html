@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://image.tmdb.org data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
   <title>MKV Merger</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -14,7 +14,7 @@
     <!-- ── Main view ── -->
     <div id="view-main" class="view active">
       <header class="app-header">
-        <div class="app-title">MKV Merger</div>
+        <div class="app-title" data-i18n="app_title">MKV Merger</div>
         <div class="header-actions">
           <button class="btn-icon" id="btn-toggle-log" title="Log">📋</button>
           <button class="btn-icon" id="btn-settings" title="Settings">⚙</button>
@@ -22,64 +22,90 @@
       </header>
 
       <div class="main-body">
-
         <!-- Tools warning -->
         <div id="tools-banner" class="tools-banner hidden">
           <span id="tools-banner-msg"></span>
         </div>
 
-        <!-- Empty state -->
-        <div id="empty-state" class="empty-state">
-          <div class="empty-icon">⊕</div>
-          <div class="empty-text">Add two or more video files</div>
-          <div class="empty-sub">The app will keep the best video and let you pick audio and subtitle tracks from each source.</div>
-          <button class="btn-primary" id="btn-add-sources">Add sources…</button>
+        <!-- Empty / drop zone -->
+        <div id="dropzone" class="dropzone">
+          <div class="dropzone-inner">
+            <div class="dropzone-icon">⊕</div>
+            <div class="dropzone-text" data-i18n="drop_hint">Drop two or more video files here</div>
+            <div class="dropzone-sub" data-i18n="drop_or">or</div>
+            <button class="btn-secondary" id="btn-add-sources" data-i18n="btn_add_sources">Add sources…</button>
+          </div>
         </div>
 
-        <!-- Sources + track selection -->
-        <div id="sources-section" class="sources-section hidden">
+        <!-- Work area (hidden until sources added) -->
+        <div id="work-area" class="work-area hidden">
 
-          <!-- Sync warning -->
-          <div id="sync-warning" class="sync-warning hidden">
-            ⚠ Duration mismatch detected between sources — audio may be out of sync.
-            <span id="sync-diff"></span>
-          </div>
-
-          <div class="sources-header">
-            <span class="sources-title">Sources</span>
-            <button class="btn-secondary small" id="btn-add-more">Add more…</button>
-            <button class="btn-icon small" id="btn-clear-all" title="Remove all">🗑</button>
-          </div>
-
-          <!-- Source list — each source renders a card -->
-          <div id="source-list" class="source-list"></div>
-
-          <!-- Output row -->
-          <div class="output-section">
-            <div class="output-row">
-              <label class="output-label">Output</label>
-              <input type="text" id="output-path" class="input" readonly>
-              <button class="btn-secondary" id="btn-browse-output">Browse…</button>
+          <!-- Sources strip -->
+          <div class="sources-strip">
+            <div class="section-header">
+              <span class="section-title" data-i18n="sec_sources">Sources</span>
+              <div class="section-actions">
+                <button class="btn-secondary small" id="btn-add-more" data-i18n="btn_add_more">Add more…</button>
+                <button class="btn-icon small" id="btn-clear-all" data-i18n-title="btn_clear_all" title="Remove all">🗑</button>
+              </div>
             </div>
-            <div class="output-row" id="output-name-row">
-              <label class="output-label">Filename</label>
-              <input type="text" id="output-name" class="input" placeholder="output.mkv">
+            <div id="source-list" class="source-list"></div>
+          </div>
+
+          <!-- Sync status card -->
+          <div id="sync-card" class="info-card hidden">
+            <div class="card-label" data-i18n="sec_sync">Sync</div>
+            <div id="sync-content" class="sync-content"></div>
+          </div>
+
+          <!-- Track plan -->
+          <div id="plan-card" class="info-card hidden">
+            <div class="card-label">
+              <span data-i18n="sec_tracks">Tracks</span>
+              <button class="btn-secondary small" id="btn-edit-tracks" style="margin-left:auto" data-i18n="btn_edit_tracks">Edit…</button>
+            </div>
+            <div id="plan-content" class="plan-content"></div>
+          </div>
+
+          <!-- Movie / series identification -->
+          <div id="movie-card" class="info-card hidden">
+            <div class="card-label">
+              <span data-i18n="sec_title">Title</span>
+              <button class="btn-secondary small" id="btn-change-movie" style="margin-left:auto" data-i18n="btn_change_movie">Change…</button>
+            </div>
+            <div id="movie-content" class="movie-content"></div>
+          </div>
+
+          <!-- Output -->
+          <div id="output-card" class="info-card">
+            <div class="card-label" data-i18n="sec_output">Output</div>
+            <div class="output-rows">
+              <div class="output-row">
+                <label class="output-label" data-i18n="lbl_folder">Folder</label>
+                <input type="text" id="output-path" class="input" readonly>
+                <button class="btn-secondary" id="btn-browse-output" data-i18n="btn_browse">Browse…</button>
+              </div>
+              <div class="output-row">
+                <label class="output-label" data-i18n="lbl_filename">Filename</label>
+                <input type="text" id="output-name" class="input" placeholder="output.mkv">
+              </div>
             </div>
           </div>
 
+          <!-- Footer actions -->
           <div class="footer-actions">
             <div class="progress-wrap hidden" id="progress-wrap">
               <div class="progress-bar-track">
                 <div class="progress-bar" id="progress-bar" style="width:0%"></div>
               </div>
-              <span id="progress-pct" class="pct-label">0%</span>
+              <span class="pct-label" id="progress-pct">0%</span>
             </div>
-            <button class="btn-primary large" id="btn-merge">Merge</button>
-            <button class="btn-danger hidden" id="btn-cancel">Cancel</button>
+            <button class="btn-primary large" id="btn-merge" data-i18n="btn_merge">Merge</button>
+            <button class="btn-danger hidden" id="btn-cancel" data-i18n="btn_cancel">Cancel</button>
           </div>
-        </div>
 
-      </div>
+        </div><!-- /work-area -->
+      </div><!-- /main-body -->
 
       <div class="log-wrap hidden" id="log-wrap">
         <div class="log-header">
@@ -88,43 +114,307 @@
         </div>
         <div id="log" class="log"></div>
       </div>
+    </div><!-- /view-main -->
+
+    <!-- ── Track editor modal ── -->
+    <div id="modal-tracks" class="modal-overlay hidden">
+      <div class="modal wide">
+        <div class="modal-header">
+          <h2 data-i18n="modal_tracks_title">Track Selection</h2>
+          <button class="btn-icon" id="btn-close-tracks">✕</button>
+        </div>
+        <p class="hint" data-i18n="modal_tracks_hint">Checked tracks will be included in the output. Click to override the automatic selection.</p>
+        <div id="track-editor-list" class="track-editor-list"></div>
+        <div class="modal-footer">
+          <button class="btn-secondary" id="btn-reset-tracks" data-i18n="btn_reset_tracks">Reset to filters</button>
+          <button class="btn-secondary" id="btn-close-tracks2" data-i18n="btn_close">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Movie search modal ── -->
+    <div id="modal-movie" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h2 id="movie-modal-title" data-i18n="modal_movie_title">Identify Title</h2>
+          <button class="btn-icon" id="btn-close-movie">✕</button>
+        </div>
+        <div class="type-toggle">
+          <label><input type="radio" name="search-type" value="movie" checked> <span data-i18n="radio_movie">Movie</span></label>
+          <label><input type="radio" name="search-type" value="tv"> <span data-i18n="radio_tv">TV Series</span></label>
+        </div>
+        <div class="search-row">
+          <input type="text" id="movie-search-input" class="input" data-i18n-ph="ph_search" placeholder="Search title…">
+          <input type="number" id="movie-search-year" class="input year-input" data-i18n-ph="ph_year" placeholder="Year">
+          <button class="btn-primary" id="btn-movie-search" data-i18n="btn_search">Search</button>
+        </div>
+        <div id="movie-search-results" class="search-results"></div>
+        <div id="movie-search-series-row" class="form-row hidden">
+          <div class="form-group"><label data-i18n="lbl_season">Season</label><input type="number" id="movie-search-season" class="input" min="1" value="1"></div>
+          <div class="form-group"><label data-i18n="lbl_episode">Episode</label><input type="number" id="movie-search-episode" class="input" min="1" value="1"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" id="btn-movie-none" data-i18n="btn_no_id">No identification</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Language picker modal ── -->
+    <div id="view-langpick" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header"><h2 data-i18n="pick_display_lang">Pick display language</h2><button class="btn-icon" id="langpick-close">✕</button></div>
+        <p class="hint" data-i18n="pick_lang_hint">The language name will be shown in the language you pick.</p>
+        <input type="text" id="langpick-search" class="input" data-i18n-ph="filter_languages" placeholder="Filter languages...">
+        <div id="langpick-list" class="langpick-list"></div>
+      </div>
+    </div>
+
+    <!-- ── Text input modal ── -->
+    <div id="view-asktext" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header"><h2 id="asktext-title">Input</h2></div>
+        <div class="form-group"><label id="asktext-label">Value:</label><input type="text" id="asktext-input" class="input"></div>
+        <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn-secondary" id="asktext-cancel" data-i18n="btn_cancel">Cancel</button>
+          <button class="btn-primary" id="asktext-ok">OK</button>
+        </div>
+      </div>
     </div>
 
     <!-- ── Settings view ── -->
     <div id="view-settings" class="view">
       <header class="app-header">
-        <button class="btn-icon" id="btn-back">←</button>
-        <div class="app-title">Settings</div>
+        <button class="btn-icon" id="btn-back" data-i18n="btn_back">←</button>
+        <div class="app-title" data-i18n="settings_title">Settings</div>
         <span></span>
       </header>
       <div class="settings-body">
 
-        <div class="settings-section">
-          <h3 class="settings-section-title">Output</h3>
-          <div class="setting-row">
-            <label>Destination folder</label>
-            <div class="path-row">
-              <input type="text" id="setting-output" class="input" readonly>
-              <button class="btn-secondary" id="btn-choose-output-folder">Browse…</button>
+        <div class="settings-group collapsed">
+          <div class="settings-group-header" data-i18n="sec_interface">Interface</div>
+          <div class="settings-section">
+            <div class="setting-row">
+              <label data-i18n="lbl_ui_lang">Interface language</label>
+              <select id="setting-ui-lang" class="input"></select>
             </div>
           </div>
-          <div class="setting-row">
-            <label>If a file already exists</label>
-            <select id="setting-on-exists" class="input">
-              <option value="rename">Rename (keep both)</option>
-              <option value="skip">Skip the file</option>
-              <option value="overwrite">Overwrite</option>
-            </select>
+        </div>
+
+        <div class="settings-group collapsed">
+          <div class="settings-group-header" data-i18n="grp_naming">Naming &amp; Paths</div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_settings_output">Output</h3>
+          <div class="acc-body">
+            <div class="setting-row">
+              <label data-i18n="lbl_dest_folder">Destination folder</label>
+              <div class="path-row">
+                <input type="text" id="setting-output" class="input" readonly>
+                <button class="btn-secondary" id="btn-choose-folder" data-i18n="btn_browse">Browse…</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <label data-i18n="lbl_on_exists">If a file already exists</label>
+              <select id="setting-on-exists" class="input">
+                <option value="rename" data-i18n="exists_rename">Rename (keep both)</option>
+                <option value="skip" data-i18n="exists_skip">Skip the file</option>
+                <option value="overwrite" data-i18n="exists_overwrite">Overwrite</option>
+              </select>
+            </div>
           </div>
         </div>
 
-        <div class="settings-footer">
-          <button class="btn-primary" id="btn-save-settings">Save Settings</button>
-          <span class="save-feedback hidden" id="save-feedback">✓ Saved</span>
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_movies">Movies</h3>
+          <div class="acc-body">
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_folder">Folder</p>
+              <label class="check-row"><input type="checkbox" id="setting-create-folder"><span data-i18n="lbl_create_folder">Create a folder for each movie</span></label>
+              <div class="setting-indent" id="folder-template-row">
+                <div class="setting-row">
+                  <label data-i18n="lbl_folder_tpl">Folder name template</label>
+                  <div class="tpl-field" data-field="folderName" data-vars="file"></div>
+                </div>
+              </div>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_filename">Filename</p>
+              <div class="setting-row">
+                <label data-i18n="lbl_output_tpl">Output filename template</label>
+                <div class="tpl-field" data-field="outputName" data-vars="file"></div>
+              </div>
+            </div>
+          </div>
         </div>
 
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_tv">TV Series</h3>
+          <div class="acc-body">
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_folder">Folder</p>
+              <label class="check-row"><input type="checkbox" id="setting-fetch-episode"><span data-i18n="lbl_fetch_episode">Fetch episode titles from TMDb</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-series-folders"><span data-i18n="lbl_series_folders">Create Series / Season folders</span></label>
+            </div>
+            <div class="setting-card hidden" id="series-show-folder-row">
+              <p class="setting-card-header" data-i18n="lbl_series_show_folder">Series folder template</p>
+              <div class="tpl-field" data-field="seriesShowFolder" data-vars="series"></div>
+            </div>
+            <div class="setting-card hidden" id="series-season-folder-row">
+              <p class="setting-card-header" data-i18n="lbl_series_season_folder">Season folder template</p>
+              <div class="tpl-field" data-field="seriesSeasonFolder" data-vars="series"></div>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_filename">Filename</p>
+              <div class="tpl-field" data-field="seriesOutputName" data-vars="series"></div>
+            </div>
+          </div>
+        </div>
+
+        </div><!-- /settings-group: Naming & Paths -->
+
+        <div class="settings-group collapsed">
+          <div class="settings-group-header" data-i18n="grp_content">File Content</div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_audio">Audio</h3>
+          <div class="acc-body">
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_filters">Filters</p>
+              <div class="setting-row">
+                <label data-i18n="lbl_audio_langs">Languages <span class="hint-inline" data-i18n="hint_audio_langs">(e.g. spa, eng)</span></label>
+                <input type="text" id="setting-audio-langs" class="input" placeholder="spa, eng">
+              </div>
+              <div class="setting-row">
+                <label data-i18n="lbl_audio_codecs">Allowed codecs <span class="hint-inline" data-i18n="hint_audio_codecs">(empty = all)</span></label>
+                <div class="chip-row" id="codec-picker"></div>
+              </div>
+              <label class="check-row"><input type="checkbox" id="setting-one-audio"><span data-i18n="lbl_one_audio">Only one audio track per language (best quality wins)</span></label>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_track_names">Track names</p>
+              <div class="setting-row">
+                <label data-i18n="lbl_audio_name_tpl">Name template</label>
+                <div class="tpl-field" data-field="audioName" data-vars="audio"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_subtitles">Subtitles</h3>
+          <div class="acc-body">
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_filters">Filters</p>
+              <div class="setting-row">
+                <label data-i18n="lbl_sub_langs">Languages <span class="hint-inline" data-i18n="hint_sub_langs">(empty = all)</span></label>
+                <input type="text" id="setting-sub-langs" class="input" placeholder="spa, eng">
+              </div>
+              <label class="check-row"><input type="checkbox" id="setting-one-sub"><span data-i18n="lbl_one_sub">Only one subtitle track per language</span></label>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_subtitle_types">Subtitle types to include</p>
+              <label class="check-row"><input type="checkbox" id="setting-include-normal"><span data-i18n="lbl_include_normal">Normal subtitles</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-forced"><span data-i18n="lbl_include_forced">Forced subtitles</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-sdh"><span data-i18n="lbl_include_sdh">SDH (Subtitles for the Deaf and Hard-of-hearing)</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-signs"><span data-i18n="lbl_include_signs">Signs &amp; Songs (foreign text only)</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-commentary"><span data-i18n="lbl_include_commentary">Commentary</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-accessibility"><span data-i18n="lbl_include_accessibility">Accessibility (audio description)</span></label>
+              <label class="check-row"><input type="checkbox" id="setting-include-unknown"><span data-i18n="lbl_include_unknown">Unknown type (unclassified tracks)</span></label>
+            </div>
+            <div class="setting-card">
+              <p class="setting-card-header" data-i18n="card_track_names">Track names</p>
+              <div class="setting-row">
+                <label data-i18n="lbl_sub_name_tpl">Name template</label>
+                <div class="tpl-field" data-field="subName" data-vars="subtitle"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_metadata">Metadata</h3>
+          <div class="acc-body">
+            <label class="check-row"><input type="checkbox" id="setting-imdb-tag"><span data-i18n="lbl_imdb_tag">Write IMDb/TMDb ID as a tag inside the MKV</span></label>
+            <label class="check-row"><input type="checkbox" id="setting-imdb-folder"><span data-i18n="lbl_imdb_folder">Add [imdbid-ttXXXX] to the folder name</span></label>
+            <label class="check-row"><input type="checkbox" id="setting-embed-cover"><span data-i18n="lbl_embed_cover">Embed cover art (poster) inside the MKV</span></label>
+          </div>
+        </div>
+
+        </div><!-- /settings-group: File Content -->
+
+        <div class="settings-group collapsed">
+          <div class="settings-group-header" data-i18n="grp_services">External Services</div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_tmdb">TMDb</h3>
+          <div class="acc-body">
+            <div class="setting-row">
+              <label data-i18n="lbl_tmdb_key">API Key</label>
+              <input type="text" id="setting-tmdb-key" class="input" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+            </div>
+            <p class="hint"><span data-i18n="hint_tmdb">Used for movie/series identification.</span> <a href="#" id="tmdb-key-link" data-i18n="tmdb_key_link">Get a free key at themoviedb.org →</a></p>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_jellyfin">Jellyfin</h3>
+          <div class="acc-body">
+            <label class="check-row"><input type="checkbox" id="setting-jellyfin-enabled"><span data-i18n="lbl_jellyfin_enabled">Refresh Jellyfin after merging</span></label>
+            <div id="jellyfin-fields">
+              <div class="setting-row"><label data-i18n="lbl_jellyfin_url">Server URL</label><input type="text" id="setting-jellyfin-url" class="input" placeholder="https://jellyfin.example.com"></div>
+              <div class="setting-row"><label data-i18n="lbl_jellyfin_key">API Key</label><input type="text" id="setting-jellyfin-key" class="input"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" data-acc>
+          <h3 class="acc-header" data-i18n="sec_ocr">Subtitle OCR (PGS → SRT)</h3>
+          <div class="acc-body">
+            <p class="hint" data-i18n="ocr_hint">Convert Blu-ray image-based subtitles (PGS) to text (SRT). Requires Tesseract OCR.</p>
+            <label class="check-row"><input type="checkbox" id="setting-ocr-enabled"><span data-i18n="lbl_ocr_enabled">Enable PGS subtitle conversion to SRT</span></label>
+            <div id="ocr-fields">
+              <div class="setting-row">
+                <label data-i18n="ocr_status_label">Status</label>
+                <div class="ocr-status-row">
+                  <span id="ocr-status-tesseract" class="status-badge"></span>
+                  <span id="ocr-status-pgsrip" class="status-badge"></span>
+                  <span id="ocr-status-pgsocr" class="status-badge"></span>
+                  <span id="ocr-status-gpu" class="status-badge"></span>
+                  <button class="btn-secondary small" id="btn-ocr-check" data-i18n="ocr_check_again">Check again</button>
+                </div>
+              </div>
+              <div class="setting-row" id="ocr-langs-row">
+                <label data-i18n="ocr_langs_label">Available languages</label>
+                <span id="ocr-langs-text" class="muted"></span>
+              </div>
+              <div class="setting-row">
+                <label data-i18n="lbl_ocr_path">Tesseract path (optional)</label>
+                <div class="path-row">
+                  <input type="text" id="setting-ocr-path" class="input" data-i18n-ph="ocr_path_hint">
+                  <button class="btn-secondary" id="btn-choose-ocr-path" data-i18n="btn_browse">Browse…</button>
+                </div>
+              </div>
+              <div class="setting-card" id="ocr-install-card">
+                <p class="setting-card-header" data-i18n="ocr_install_title">Install Tesseract OCR</p>
+                <p class="hint" data-i18n="ocr_install_mac">macOS (Homebrew):</p>
+                <code class="code-block" data-i18n="ocr_install_mac_cmd">brew install tesseract tesseract-lang</code>
+                <p class="hint" data-i18n="ocr_install_win">Windows:</p>
+                <a href="#" id="ocr-win-link" data-i18n="ocr_install_win_link">Download from UB Mannheim →</a>
+                <p class="hint" data-i18n="ocr_install_advanced">Advanced (better accuracy for non-Latin scripts):</p>
+                <code class="code-block" data-i18n="ocr_install_advanced_cmd">pip install pgsrip   # CPU / pip install pgsocr[lm]  # GPU</code>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        </div><!-- /settings-group: External Services -->
+
+        <div class="settings-footer">
+          <button class="btn-primary" id="btn-save-settings" data-i18n="btn_save">Save Settings</button>
+          <span class="save-feedback hidden" id="save-feedback" data-i18n="save_ok">✓ Saved</span>
+        </div>
       </div>
-    </div>
+    </div><!-- /view-settings -->
 
   </div>
   <script src="app.js"></script>
