@@ -44,7 +44,9 @@
       "target": [{ "target": "dmg" }],
       "category": "public.app-category.video",
       "darkModeSupport": true,
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "identity": "-",
+      "hardenedRuntime": false
     }
   }
 }

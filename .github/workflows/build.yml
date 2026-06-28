@@ -57,11 +57,18 @@ jobs:
             cp "$BREW/bin/mkvmerge" "$app/vendor/mkvmerge"
             chmod +x "$app/vendor/mkvmerge"
             dylibbundler -cd -of -b -x "$app/vendor/mkvmerge" -d "$app/vendor/libs" -p '@executable_path/libs/'
+            # dylibbundler rewrites install names, invalidating the signatures.
+            # Re-sign ad-hoc (libs before the executable) so the spawned binary
+            # is not killed by Gatekeeper on a clean Mac.
+            codesign --force --sign - "$app/vendor/libs/"*.dylib
+            codesign --force --sign - "$app/vendor/mkvmerge"
           done
           # ffmpeg → Merger only (audio sync detection), made self-contained too.
           cp "$BREW/bin/ffmpeg" "apps/merger/vendor/ffmpeg"
           chmod +x "apps/merger/vendor/ffmpeg"
           dylibbundler -cd -of -b -x "apps/merger/vendor/ffmpeg" -d "apps/merger/vendor/libs" -p '@executable_path/libs/'
+          codesign --force --sign - "apps/merger/vendor/libs/"*.dylib
+          codesign --force --sign - "apps/merger/vendor/ffmpeg"
 
       - name: Vendor binaries (Windows)
         if: matrix.platform == 'win'
