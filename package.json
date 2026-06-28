@@ -1,6 +1,22 @@
 {
-  "name": "MkvTools",
+  "name": "mkvtools",
   "version": "1.0.0",
   "private": true,
-  "description": "Monorepo for MKV Remuxer and MKV Merger desktop apps"
+  "description": "Monorepo for MKV Remuxer and MKV Merger desktop apps",
+  "author": "Luis de Campos <luisdecampos@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ldecampos/MkvTools.git"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "test": "pnpm --filter @mkv-tools/core test",
+    "vendor": "bash scripts/bundle-vendor.sh",
+    "start:remuxer": "pnpm --filter mkv-remuxer start",
+    "start:merger": "pnpm --filter mkv-merger start"
+  }
 }
