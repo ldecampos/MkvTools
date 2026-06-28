@@ -4,6 +4,10 @@
   "description": "Merge best tracks from multiple MKV sources into one file",
   "author": "Luis de Campos <luisdecampos@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ldecampos/MkvTools.git"
+  },
   "main": "src/main/main.js",
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",
