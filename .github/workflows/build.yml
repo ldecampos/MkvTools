@@ -161,6 +161,6 @@ jobs:
             **macOS**: download the `.dmg` (Apple Silicon / `arm64`).
             **Windows**: download the `.exe` installer.
             **Linux**: download the `.AppImage` or `.deb`.
-          files: dist/*
+          files: dist/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
