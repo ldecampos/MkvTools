@@ -14,9 +14,6 @@ jobs:
           - os: macos-latest
             platform: mac
             arch: arm64
-          - os: macos-13
-            platform: mac
-            arch: x64
           - os: windows-latest
             platform: win
             arch: x64
@@ -161,7 +158,7 @@ jobs:
             Merge tracks from 2+ MKV sources: choose which source provides video and pick any audio/subtitle tracks from each source.
 
             ---
-            **macOS**: download the `.dmg` matching your chip — `arm64` (Apple Silicon) or `x64` (Intel).
+            **macOS**: download the `.dmg` (Apple Silicon / `arm64`).
             **Windows**: download the `.exe` installer.
             **Linux**: download the `.AppImage` or `.deb`.
           files: dist/*
