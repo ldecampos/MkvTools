@@ -1,11 +1,11 @@
-const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { findMkvmerge, buildMatroskaFlagArgs } = require('@mkv-tools/core/src/mkvmergeService');
 const { writeTagsFile } = require('@mkv-tools/core/src/tagsService');
 const { downloadPoster } = require('@mkv-tools/core/src/posterService');
+const { createRunner } = require('@mkv-tools/core/src/procRunner');
 
-let activeProcess = null;
+const runner = createRunner();
 
 const remuxService = {
   findMkvmerge,
@@ -81,7 +81,7 @@ const remuxService = {
 
     onLog?.('Running mkvmerge...');
     try {
-      await runWithProgress(mkvmerge, args, onProgress, onLog);
+      await runner.runWithProgress(mkvmerge, args, onProgress, onLog);
     } finally {
       if (tagsFile)   { try { fs.unlinkSync(tagsFile);   } catch (_) {} }
       if (posterFile) { try { fs.unlinkSync(posterFile); } catch (_) {} }
@@ -89,29 +89,7 @@ const remuxService = {
     return output;
   },
 
-  cancel() { if (activeProcess) { activeProcess.kill('SIGTERM'); activeProcess = null; } }
+  cancel() { runner.cancel(); }
 };
-
-function runWithProgress(bin, args, onProgress, onLog) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(bin, args);
-    activeProcess = proc;
-    let stderr = '';
-    proc.stdout.on('data', d => {
-      for (const line of d.toString().split('\n')) {
-        const m = line.match(/#GUI#progress\s+(\d+)%/);
-        if (m) onProgress?.(parseInt(m[1]) / 100);
-        else if (line.trim() && !line.startsWith('#GUI#')) onLog?.(line.trim());
-      }
-    });
-    proc.stderr.on('data', d => { stderr += d; onLog?.(d.toString().trim()); });
-    proc.on('close', code => {
-      activeProcess = null;
-      if (code === 0 || code === 1) resolve();
-      else reject(new Error(`mkvmerge exited ${code}. ${stderr.slice(0, 200)}`));
-    });
-    proc.on('error', e => { activeProcess = null; reject(e); });
-  });
-}
 
 module.exports = { remuxService };
