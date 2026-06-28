@@ -14,12 +14,13 @@ const remuxService = {
   planTracks: require('@mkv-tools/core/src/mkvmergeService').planTracks,
 
   /** Produce the output MKV in one mkvmerge pass. */
-  async produce({ input, output, plan, fileTitle, movie, writeImdbTag, embedCoverArt, onProgress, onLog }) {
+  async produce({ input, output, plan, fileTitle, movie, writeImdbTag, embedCoverArt, convertedSubs = [], onProgress, onLog }) {
     const mkvmerge = findMkvmerge();
     const kept = plan.filter(p => p.keep);
     const video = kept.filter(p => p.role === 'video');
     const audio = kept.filter(p => p.role === 'audio');
-    const subs  = kept.filter(p => p.role === 'subtitles');
+    const convertedIds = new Set(convertedSubs.map(cs => cs.originalTrackId));
+    const subs  = kept.filter(p => p.role === 'subtitles' && !convertedIds.has(p.id));
     if (video.length === 0) throw new Error('No video track selected');
 
     const args = ['--gui-mode', '--output', output, '--no-buttons', '--no-attachments',
@@ -78,6 +79,21 @@ const remuxService = {
 
     args.push('--no-track-tags');
     args.push(input);
+
+    for (const cs of convertedSubs) {
+      const t = cs.track;
+      args.push('--language',             `0:${t.lang}`);
+      args.push('--track-name',           `0:${t.newName || ''}`);
+      args.push('--default-track-flag',   '0:no');
+      args.push('--forced-display-flag',  `0:${t.forced ? 'yes' : 'no'}`);
+      if (t.trackType === 'sdh'           || t.flagHearingImpaired)    args.push('--hearing-impaired-flag',   '0:1');
+      if (t.trackType === 'commentary'    || t.flagCommentary)          args.push('--commentary-flag',          '0:1');
+      if (t.trackType === 'accessibility' || t.flagVisualImpaired)      args.push('--visual-impaired-flag',    '0:1');
+      if (t.trackType === 'accessibility' || t.flagTextDescriptions)    args.push('--text-descriptions-flag',  '0:1');
+      if (t.flagOriginal)                                               args.push('--original-flag',           '0:1');
+      args.push('--no-track-tags');
+      args.push(cs.srtPath);
+    }
 
     onLog?.('Running mkvmerge...');
     try {

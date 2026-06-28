@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs  = require('fs');
+const os  = require('os');
 
 // Shared settings with Remuxer (same file → configure once, applies to both apps)
 const { createStore }      = require('@mkv-tools/core/src/store');
@@ -239,14 +240,46 @@ ipcMain.handle('merge', async (_, { sources, plan, movie, syncResults, videoSour
     }
     fs.mkdirSync(path.dirname(finalOutput), { recursive: true });
 
+    const convertedSubs = [];
+    if (settings.ocrEnabled) {
+      const mkvmergePath = mkvmergeSetup.findMkvmerge();
+      const pgsTracks = plan.filter(p => p.role === 'subtitles' && p.keep && /pgs|s_hdmv/i.test(p.codec || ''));
+      for (const t of pgsTracks) {
+        try {
+          const sourceFile = sources[t.sourceIndex].file;
+          log(`OCR: Converting PGS track ${t.id} (${t.lang}) from S${t.sourceIndex + 1} to SRT...`, 'info');
+          const srt = await ocrService.convertPgsToSrt(sourceFile, t.id, {
+            mkvmergePath,
+            lang: t.lang,
+            customTesseractPath: settings.ocrPath || '',
+          }, frac => mainWindow?.webContents.send('progress', Math.round((frac || 0) * 100)));
+          if (!srt.trim()) {
+            log(`OCR: Track ${t.id} produced no text — keeping PGS`, 'warn');
+            continue;
+          }
+          const srtPath = path.join(os.tmpdir(), `mkvtools_ocr_${Date.now()}_${t.id}.srt`);
+          fs.writeFileSync(srtPath, srt, 'utf8');
+          convertedSubs.push({ originalTrackId: t.id, sourceIndex: t.sourceIndex, srtPath, track: t });
+          log(`OCR: Track ${t.id} → SRT (${t.lang})`, 'success');
+        } catch (err) {
+          log(`OCR: Track ${t.id} failed — keeping PGS: ${err.message}`, 'warn');
+        }
+      }
+    }
+
     await produce({
       sources, output: finalOutput, plan, fileTitle, movie,
       writeImdbTag: settings.writeImdbTag,
       embedCoverArt: settings.embedCoverArt,
       syncResults: syncResults || [],
+      convertedSubs,
       onProgress: p => mainWindow?.webContents.send('progress', Math.round(p * 100)),
       onLog: m => log(m, 'info'),
     });
+
+    for (const cs of convertedSubs) {
+      try { fs.unlinkSync(cs.srtPath); } catch (_) {}
+    }
 
     log(`Done: ${finalOutput}`, 'success');
     mainWindow?.webContents.send('merge-complete', { output: finalOutput });

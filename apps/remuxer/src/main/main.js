@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { createStore } = require('@mkv-tools/core/src/store');
 const { remuxService } = require('./remuxService');
 const { tmdbService } = require('@mkv-tools/core/src/tmdbService');
@@ -227,12 +228,44 @@ async function runBatch(items) {
       }
       plannedOutputs.add(output);
 
+      const convertedSubs = [];
+      if (settings.ocrEnabled) {
+        const mkvmergePath = remuxService.findMkvmerge();
+        const pgsTracks = plan.filter(p => p.role === 'subtitles' && p.keep && /pgs|s_hdmv/i.test(p.codec || ''));
+        for (const t of pgsTracks) {
+          if (cancelRequested) break;
+          try {
+            sendLog(`OCR: Converting PGS track ${t.id} (${t.lang}) to SRT...`, 'info');
+            const srt = await ocrService.convertPgsToSrt(filePath, t.id, {
+              mkvmergePath,
+              lang: t.lang,
+              customTesseractPath: settings.ocrPath || '',
+            }, frac => sendProgress(filePath, Math.round((frac || 0) * 100)));
+            if (!srt.trim()) {
+              sendLog(`OCR: Track ${t.id} produced no text — keeping PGS`, 'warn');
+              continue;
+            }
+            const srtPath = path.join(os.tmpdir(), `mkvtools_ocr_${Date.now()}_${t.id}.srt`);
+            fs.writeFileSync(srtPath, srt, 'utf8');
+            convertedSubs.push({ originalTrackId: t.id, srtPath, track: t });
+            sendLog(`OCR: Track ${t.id} → SRT (${t.lang})`, 'success');
+          } catch (err) {
+            sendLog(`OCR: Track ${t.id} failed — keeping PGS: ${err.message}`, 'warn');
+          }
+        }
+      }
+
       await remuxService.produce({
         input: filePath, output, plan, fileTitle,
         movie, writeImdbTag: settings.writeImdbTag, embedCoverArt: settings.embedCoverArt,
+        convertedSubs,
         onProgress: p => sendProgress(filePath, Math.round(p * 100)),
         onLog: m => sendLog(m, 'info')
       });
+
+      for (const cs of convertedSubs) {
+        try { fs.unlinkSync(cs.srtPath); } catch (_) {}
+      }
 
       if (item.tmpDir) {
         try { fs.rmSync(item.tmpDir, { recursive: true, force: true }); sendLog(`Deleted temp rip folder: ${path.basename(item.tmpDir)}`, 'info'); }

@@ -15,7 +15,7 @@ const runner = createRunner();
  * syncResults: [{ sourceIndex, status, offsetMs, speedCorrection }] from analyzeSyncSources
  * Sources that have status 'offset' or 'drift' get --sync flags applied.
  */
-async function produce({ sources, output, plan, fileTitle, movie, writeImdbTag, embedCoverArt, syncResults = [], onProgress, onLog }) {
+async function produce({ sources, output, plan, fileTitle, movie, writeImdbTag, embedCoverArt, syncResults = [], convertedSubs = [], onProgress, onLog }) {
   const mkvmerge = findMkvmerge();
   if (!mkvmerge) throw new Error('mkvmerge not found. Install MKVToolNix.');
 
@@ -55,6 +55,13 @@ async function produce({ sources, output, plan, fileTitle, movie, writeImdbTag, 
   const syncMap = new Map(); // sourceIndex → syncResult
   for (const r of syncResults) syncMap.set(r.sourceIndex, r);
 
+  // Index converted PGS tracks by sourceIndex → Set of original track IDs
+  const convertedBySource = new Map();
+  for (const cs of convertedSubs) {
+    if (!convertedBySource.has(cs.sourceIndex)) convertedBySource.set(cs.sourceIndex, new Set());
+    convertedBySource.get(cs.sourceIndex).add(cs.originalTrackId);
+  }
+
   // Group plan by source
   const bySource = new Map();
   for (const p of plan) {
@@ -63,9 +70,10 @@ async function produce({ sources, output, plan, fileTitle, movie, writeImdbTag, 
   }
 
   for (const [si, tracks] of bySource.entries()) {
+    const convertedIds = convertedBySource.get(si) || new Set();
     const videos = tracks.filter(p => p.role === 'video' && p.keep);
     const audios = tracks.filter(p => p.role === 'audio' && p.keep);
-    const subs   = tracks.filter(p => p.role === 'subtitles' && p.keep);
+    const subs   = tracks.filter(p => p.role === 'subtitles' && p.keep && !convertedIds.has(p.id));
 
     // Skip source if it contributes nothing
     if (!videos.length && !audios.length && !subs.length) continue;
@@ -117,6 +125,31 @@ async function produce({ sources, output, plan, fileTitle, movie, writeImdbTag, 
 
     args.push('--no-track-tags');
     args.push(sources[si].file);
+  }
+
+  for (const cs of convertedSubs) {
+    const t = cs.track;
+    args.push('--language',            `0:${t.lang}`);
+    args.push('--track-name',          `0:${t.newName || ''}`);
+    args.push('--default-track-flag',  '0:no');
+    args.push('--forced-display-flag', `0:${t.forced ? 'yes' : 'no'}`);
+    if (t.trackType === 'sdh'           || t.flagHearingImpaired)    args.push('--hearing-impaired-flag',   '0:1');
+    if (t.trackType === 'commentary'    || t.flagCommentary)          args.push('--commentary-flag',          '0:1');
+    if (t.trackType === 'accessibility' || t.flagVisualImpaired)      args.push('--visual-impaired-flag',    '0:1');
+    if (t.trackType === 'accessibility' || t.flagTextDescriptions)    args.push('--text-descriptions-flag',  '0:1');
+    if (t.flagOriginal)                                               args.push('--original-flag',           '0:1');
+    // Inherit sync correction from the source this track came from
+    const sync = syncMap.get(cs.sourceIndex);
+    if (sync && (sync.status === 'offset' || sync.status === 'drift') && sync.offsetMs !== 0) {
+      if (sync.speedCorrection) {
+        const { originalMs, adjustedMs } = sync.speedCorrection;
+        args.push('--sync', `0:${sync.offsetMs},${originalMs}/${adjustedMs}`);
+      } else {
+        args.push('--sync', `0:${sync.offsetMs}`);
+      }
+    }
+    args.push('--no-track-tags');
+    args.push(cs.srtPath);
   }
 
   logPlan(plan, syncResults, onLog);
