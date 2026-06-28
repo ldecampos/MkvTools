@@ -14,7 +14,6 @@
     "pnpm": ">=10"
   },
   "scripts": {
-    "test": "pnpm --filter @mkv-tools/core test",
     "vendor": "bash scripts/bundle-vendor.sh",
     "start:remuxer": "pnpm --filter mkv-remuxer start",
     "start:merger": "pnpm --filter mkv-merger start"
