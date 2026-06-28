@@ -20,10 +20,6 @@ builder-effective-config.yaml
 vendor/
 apps/*/vendor/
 
-# Tests — kept locally, not tracked (run with: pnpm exec vitest run)
-packages/mkv-core/tests/
-packages/mkv-core/vitest.config.mjs
-
 # Source maps
 *.map
 
