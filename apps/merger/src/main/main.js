@@ -1,7 +1,6 @@
 'use strict';
 const { app, BrowserWindow, ipcMain, dialog, shell, powerSaveBlocker } = require('electron');
 const path = require('path');
-const os  = require('os');
 const fs  = require('fs');
 
 // Shared settings with Remuxer (same file → configure once, applies to both apps)
@@ -13,12 +12,13 @@ const { guessFromFilename } = require('@mkv-tools/core/src/filenameParser');
 const {
   FILE_VARIABLES, AUDIO_VARIABLES, SUBTITLE_VARIABLES,
   SERIES_VARIABLES, TRACK_VARIABLES, BUILTIN_PRESETS,
-  renderTemplate, buildMediaCtx,
 } = require('@mkv-tools/core/src/nameTemplate');
 const { ALL_LANGS, VARIANT_MAP } = require('@mkv-tools/core/src/langData');
+const { createSettings } = require('@mkv-tools/core/src/settings');
+const { computeOutput, uniqueName } = require('@mkv-tools/core/src/outputNaming');
 const mkvmergeSetup = require('@mkv-tools/core/src/mkvmergeSetup');
 const ffmpegSetup   = require('@mkv-tools/core/src/ffmpegSetup');
-const { getStrings, languageList } = require('./i18n');
+const { getStrings, languageList, SUPPORTED } = require('./i18n');
 const { analyzeSyncSources } = require('@mkv-tools/core/src/syncService');
 const { planMergeTracks }    = require('./planMerge');
 const { produce, cancel }    = require('./mergeService');
@@ -26,47 +26,9 @@ const ocrService             = require('@mkv-tools/core/src/ocrService');
 
 // Settings file shared with Remuxer; migrates automatically from the old name on first run
 const store = createStore('.mkv-tools-settings.json', '.mkv-remuxer-settings.json');
-
-const DEFAULTS = {
-  uiLang:                    '',
-  outputPath:                path.join(os.homedir(), 'Movies'),
-  audioLangs:                'spa, eng',
-  subLangs:                  'spa, eng',
-  audioCodecs:               '',
-  audioNameTemplate:         '{lang} {variant_label} {codec_short} {channels}',
-  subNameTemplate:           '{lang} {variant_label} {forced}',
-  fileTitleTemplate:         '{title_year}',
-  outputNameTemplate:        '{title_year}',
-  createFolder:              true,
-  folderNameTemplate:        '{title_year}',
-  customFileTitle:           false,
-  seriesOutputNameTemplate:  '{series} - {sxxexx} - {episode_title}',
-  seriesFileTitleTemplate:   '',
-  seriesCustomFileTitle:     false,
-  seriesCreateFolders:       true,
-  seriesShowFolderTemplate:  '{series} ({year})',
-  seriesSeasonFolderTemplate:'Season {season2}',
-  fetchEpisodeTitle:         true,
-  oneSubPerLang:             false,
-  oneAudioPerLang:           false,
-  includeNormalSubs:         true,
-  includeForcedSubs:         true,
-  includeSdh:                false,
-  includeSigns:              false,
-  includeCommentary:         false,
-  includeAccessibility:      false,
-  includeUnknownSubs:        true,
-  ocrEnabled:                false,
-  ocrPath:                   '',
-  writeImdbTag:              true,
-  embedCoverArt:             false,
-  imdbInFolder:              false,
-  onFileExists:              'rename',
-  tmdbApiKey:                '',
-  jellyfinEnabled:           false,
-  jellyfinUrl:               '',
-  jellyfinApiKey:            '',
-};
+// Shared settings schema — keys stay in sync with the Remuxer (same file on disk).
+const settingsStore = createSettings(store);
+const DEFAULTS = settingsStore.DEFAULTS;
 
 let mainWindow;
 let merging = false;
@@ -78,9 +40,16 @@ function unblockSleep() {
   sleepBlockerId = null;
 }
 
+function detectOSLang() {
+  try {
+    const base = (app.getLocale() || 'en').toLowerCase().split('-')[0];
+    return SUPPORTED.includes(base) ? base : 'en';
+  } catch (_) { return 'en'; }
+}
+
 function getSettings() {
-  const s = {};
-  for (const k of Object.keys(DEFAULTS)) s[k] = store.get(k, DEFAULTS[k]);
+  const s = settingsStore.getAll();
+  if (!s.uiLang) s.uiLang = detectOSLang();
   return s;
 }
 
@@ -108,7 +77,7 @@ app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) creat
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 ipcMain.handle('get-settings', () => getSettings());
-ipcMain.handle('save-settings', (_, s) => { Object.entries(s).forEach(([k, v]) => store.set(k, v)); return true; });
+ipcMain.handle('save-settings', (_, s) => { settingsStore.saveAll(s); return true; });
 ipcMain.handle('get-meta', () => ({
   fileVariables: FILE_VARIABLES, trackVariables: TRACK_VARIABLES,
   audioVariables: AUDIO_VARIABLES, subtitleVariables: SUBTITLE_VARIABLES,
@@ -303,66 +272,7 @@ ipcMain.handle('merge', async (_, { sources, plan, movie, syncResults, videoSour
 ipcMain.handle('cancel', () => { cancel(); merging = false; unblockSleep(); return true; });
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-function buildFileCtx(movie, filePath, plan) {
-  const filename = path.basename(filePath, path.extname(filePath));
-  const title = movie?.title || filename;
-  const year  = movie?.year  || '';
-  return {
-    title, year,
-    title_year: year ? `${title} (${year})` : title,
-    filename,
-    ...buildMediaCtx(plan, filePath, title),
-  };
-}
-function buildSeriesCtx(movie, filePath, plan) {
-  const filename = path.basename(filePath, path.extname(filePath));
-  const season = movie?.season  || 0;
-  const ep     = movie?.episode || 0;
-  const pad    = n => String(n).padStart(2, '0');
-  const title  = movie?.title || filename;
-  return {
-    series: title, year: movie?.year || '',
-    season: String(season), episode: String(ep),
-    season2: pad(season), episode2: pad(ep),
-    sxxexx: `S${pad(season)}E${pad(ep)}`,
-    episode_title: movie?.episodeTitle || '', filename,
-    ...buildMediaCtx(plan, filePath, title),
-  };
-}
-function computeOutput(filePath, movie, settings, isSeries, plan) {
-  if (isSeries) {
-    const ctx = buildSeriesCtx(movie, filePath, plan);
-    const outName = render(settings.seriesOutputNameTemplate || '{series} - {sxxexx}', ctx) || ctx.filename;
-    let outDir = settings.outputPath;
-    if (settings.seriesCreateFolders) {
-      let showFolder = render(settings.seriesShowFolderTemplate || '{series} ({year})', ctx) || ctx.series;
-      if (settings.imdbInFolder && movie?.imdbId) showFolder += ` [imdbid-${movie.imdbId}]`;
-      const seasonFolder = render(settings.seriesSeasonFolderTemplate || 'Season {season2}', ctx);
-      outDir = path.join(settings.outputPath, sanitize(showFolder), sanitize(seasonFolder));
-    }
-    const fileTitle = settings.seriesCustomFileTitle ? render(settings.seriesFileTitleTemplate || '', ctx) : outName;
-    return { output: path.join(outDir, sanitize(outName) + '.mkv'), fileTitle };
-  }
-  const ctx = buildFileCtx(movie, filePath, plan);
-  const outName = render(settings.outputNameTemplate || '{title_year}', ctx) || ctx.filename;
-  let outDir = settings.outputPath;
-  if (settings.createFolder) {
-    let folder = render(settings.folderNameTemplate || '{title_year}', ctx) || ctx.title_year;
-    if (settings.imdbInFolder && movie?.imdbId) folder += ` [imdbid-${movie.imdbId}]`;
-    outDir = path.join(settings.outputPath, sanitize(folder));
-  }
-  const fileTitle = settings.customFileTitle ? render(settings.fileTitleTemplate || '', ctx) : outName;
-  return { output: path.join(outDir, sanitize(outName) + '.mkv'), fileTitle };
-}
-function render(tpl, ctx)  { return renderTemplate(tpl, ctx); }
-function sanitize(name)    { return (name || 'output').replace(/[/\\:*?"<>|]/g, '').trim() || 'output'; }
-function uniqueName(fp) {
-  if (!fs.existsSync(fp)) return fp;
-  const dir = path.dirname(fp), ext = path.extname(fp), base = path.basename(fp, ext);
-  let n = 1, c;
-  do { c = path.join(dir, `${base} (${n})${ext}`); n++; } while (fs.existsSync(c) && n < 1000);
-  return c;
-}
+// computeOutput / sanitize / uniqueName live in @mkv-tools/core/src/outputNaming
 function log(message, level = 'info') {
   mainWindow?.webContents.send('log', { message, level, time: new Date().toLocaleTimeString() });
 }
