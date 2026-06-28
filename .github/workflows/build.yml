@@ -59,12 +59,12 @@ jobs:
             mkdir -p "$app/vendor"
             cp "$BREW/bin/mkvmerge" "$app/vendor/mkvmerge"
             chmod +x "$app/vendor/mkvmerge"
-            dylibbundler -of -b -x "$app/vendor/mkvmerge" -d "$app/vendor/libs" -p '@executable_path/libs/'
+            dylibbundler -cd -of -b -x "$app/vendor/mkvmerge" -d "$app/vendor/libs" -p '@executable_path/libs/'
           done
           # ffmpeg → Merger only (audio sync detection), made self-contained too.
           cp "$BREW/bin/ffmpeg" "apps/merger/vendor/ffmpeg"
           chmod +x "apps/merger/vendor/ffmpeg"
-          dylibbundler -of -b -x "apps/merger/vendor/ffmpeg" -d "apps/merger/vendor/libs" -p '@executable_path/libs/'
+          dylibbundler -cd -of -b -x "apps/merger/vendor/ffmpeg" -d "apps/merger/vendor/libs" -p '@executable_path/libs/'
 
       - name: Vendor binaries (Windows)
         if: matrix.platform == 'win'
