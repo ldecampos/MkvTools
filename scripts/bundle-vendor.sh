@@ -30,17 +30,20 @@ echo "Bundling mkvmerge..."
 bundle_mkvmerge "$ROOT/apps/remuxer"
 bundle_mkvmerge "$ROOT/apps/merger"
 
-# ── ffmpeg (optional — for future sync detection in MKV Merger) ───────────────
-# Uncomment when sync detection via ffprobe is implemented.
-#
-# FFMPEG_PATH="$(which ffmpeg 2>/dev/null || echo '')"
-# if [ -n "$FFMPEG_PATH" ]; then
-#   cp "$FFMPEG_PATH"         "$ROOT/apps/merger/vendor/ffmpeg"
-#   cp "$(which ffprobe)"     "$ROOT/apps/merger/vendor/ffprobe"
-#   chmod +x "$ROOT/apps/merger/vendor/ffmpeg" "$ROOT/apps/merger/vendor/ffprobe"
-#   echo "  ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
-# else
-#   echo "  WARNING: ffmpeg not found — brew install ffmpeg when needed"
-# fi
+# ── ffmpeg (MKV Merger only — audio sync detection) ───────────────────────────
+# The Merger's sync analysis extracts PCM with ffmpeg. Bundle it so the feature
+# works without the user installing ffmpeg separately. For local dev this copies
+# the system ffmpeg as-is; release builds vendor a self-contained ffmpeg in CI.
+
+echo "Bundling ffmpeg (Merger)..."
+FFMPEG_PATH="$(which ffmpeg 2>/dev/null || echo '')"
+if [ -n "$FFMPEG_PATH" ]; then
+  mkdir -p "$ROOT/apps/merger/vendor"
+  cp "$FFMPEG_PATH" "$ROOT/apps/merger/vendor/ffmpeg"
+  chmod +x "$ROOT/apps/merger/vendor/ffmpeg"
+  echo "  ffmpeg: $(ffmpeg -version 2>&1 | head -1 | awk '{print $3}')"
+else
+  echo "  WARNING: ffmpeg not found — run 'brew install ffmpeg' (sync detection needs it)"
+fi
 
 echo "Done."

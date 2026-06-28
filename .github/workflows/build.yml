@@ -45,27 +45,28 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # ── mkvmerge vendoring ─────────────────────────────────────────────────────
+      # ── Vendoring: mkvmerge (both apps) + ffmpeg (Merger only, for sync) ────────
 
-      - name: Vendor mkvmerge (macOS)
+      - name: Vendor binaries (macOS)
         if: matrix.platform == 'mac'
         run: |
-          brew install mkvtoolnix
+          brew install mkvtoolnix ffmpeg dylibbundler
           BREW=$(brew --prefix)
+          # mkvmerge → both apps. dylibbundler copies every non-system dylib into
+          # vendor/libs and rewrites the install names to @executable_path/libs,
+          # so the binary runs on a clean Mac without Homebrew installed.
           for app in apps/remuxer apps/merger; do
-            mkdir -p "$app/vendor/libs"
+            mkdir -p "$app/vendor"
             cp "$BREW/bin/mkvmerge" "$app/vendor/mkvmerge"
             chmod +x "$app/vendor/mkvmerge"
-            # Copy Qt6 dylibs the binary links against
-            otool -L "$app/vendor/mkvmerge" | awk '/\.dylib/{print $1}' \
-              | grep -v '^/usr/lib\|^/System' | while read lib; do
-                name=$(basename "$lib")
-                src=$(find "$BREW/lib" -name "$name" 2>/dev/null | head -1)
-                [ -f "$src" ] && cp "$src" "$app/vendor/libs/" || true
-              done
+            dylibbundler -of -b -x "$app/vendor/mkvmerge" -d "$app/vendor/libs" -p '@executable_path/libs/'
           done
+          # ffmpeg → Merger only (audio sync detection), made self-contained too.
+          cp "$BREW/bin/ffmpeg" "apps/merger/vendor/ffmpeg"
+          chmod +x "apps/merger/vendor/ffmpeg"
+          dylibbundler -of -b -x "apps/merger/vendor/ffmpeg" -d "apps/merger/vendor/libs" -p '@executable_path/libs/'
 
-      - name: Vendor mkvmerge (Windows)
+      - name: Vendor binaries (Windows)
         if: matrix.platform == 'win'
         shell: pwsh
         run: |
@@ -75,17 +76,27 @@ jobs:
             New-Item -ItemType Directory -Force "$app\vendor" | Out-Null
             Copy-Item $src "$app\vendor\mkvmerge.exe"
           }
+          # Static ffmpeg (single self-contained .exe) for the Merger.
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_dl
+          $ff = Get-ChildItem -Recurse ffmpeg_dl -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item $ff.FullName "apps\merger\vendor\ffmpeg.exe"
 
-      - name: Vendor mkvmerge (Linux)
+      - name: Vendor binaries (Linux)
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y mkvtoolnix
+          sudo apt-get install -y mkvtoolnix xz-utils
           for app in apps/remuxer apps/merger; do
             mkdir -p "$app/vendor"
             cp "$(which mkvmerge)" "$app/vendor/mkvmerge"
             chmod +x "$app/vendor/mkvmerge"
           done
+          # Static ffmpeg (single self-contained binary) for the Merger.
+          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz
+          tar xf ffmpeg.tar.xz
+          cp ffmpeg-*-amd64-static/ffmpeg apps/merger/vendor/ffmpeg
+          chmod +x apps/merger/vendor/ffmpeg
 
       # ── Build ──────────────────────────────────────────────────────────────────
 
