@@ -16,6 +16,7 @@ const { spawn, execFile } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
+const { toIso2 } = require('./langData');
 
 // ── Tool detection ─────────────────────────────────────────────────────────────
 
@@ -174,30 +175,49 @@ async function extractTracksToFiles(mkvmergePath, inputFile, specs, onProgress) 
 
 // ── Tesseract per-image OCR ────────────────────────────────────────────────────
 
-async function tessOcrBuffer(tesseractPath, imageBuffer, lang, tmpDir) {
-  const tmpPng = path.join(tmpDir, `tess_${Date.now()}_${Math.random().toString(36).slice(2)}.png`);
-  const tmpOut = tmpPng.replace(/\.png$/, '');
+async function ocrPgmBuffer(tesseractPath, pgmBuffer, lang, tmpDir) {
+  const base = path.join(tmpDir, `tess_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  const pgm = base + '.pgm';
   try {
-    fs.writeFileSync(tmpPng, imageBuffer);
+    fs.writeFileSync(pgm, pgmBuffer);
     await runCmd(tesseractPath, [
-      tmpPng, tmpOut,
+      pgm, base,
       '-l', lang || 'eng',
-      '--psm', '6',   // assume uniform block of text
+      '--psm', '6',   // assume a uniform block of text
       '--oem', '1',   // LSTM engine (best accuracy)
-    ], 10000);
-    const txtFile = tmpOut + '.txt';
+    ], 15000);
+    const txtFile = base + '.txt';
     const text = fs.existsSync(txtFile) ? fs.readFileSync(txtFile, 'utf8').trim() : '';
     if (fs.existsSync(txtFile)) fs.unlinkSync(txtFile);
     return text;
   } finally {
-    if (fs.existsSync(tmpPng)) fs.unlinkSync(tmpPng);
+    if (fs.existsSync(pgm)) fs.unlinkSync(pgm);
   }
 }
 
 // ── PGS parser + parallel OCR ─────────────────────────────────────────────────
 
+// pgs-parser's DisplaySet.imageData() builds a browser ImageData, a global that
+// does not exist in Node. Provide a minimal stand-in compatible with its use.
+if (typeof globalThis.ImageData === 'undefined') {
+  globalThis.ImageData = class ImageData {
+    constructor(data, width, height) {
+      if (typeof data === 'number') {        // new ImageData(width, height)
+        this.width = data;
+        this.height = width;
+        this.data = new Uint8ClampedArray(this.width * this.height * 4);
+      } else {                                // new ImageData(data, width, height?)
+        this.data = data;
+        this.width = width;
+        this.height = height ?? (data.length / 4 / width);
+      }
+    }
+  };
+}
+
 function pgsAvailable() {
-  try { require('pgs-parser'); return true; } catch (_) { return false; }
+  try { return typeof require('pgs-parser').parseDisplaySets === 'function'; }
+  catch (_) { return false; }
 }
 
 function formatSrtTimestamp(ms) {
@@ -208,55 +228,115 @@ function formatSrtTimestamp(ms) {
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')},${String(mil).padStart(3,'0')}`;
 }
 
-async function convertPgsToSrtNative(supFile, lang, tesseractPath, tmpDir, onProgress) {
-  const { parsePgs, renderSubtitle } = require('pgs-parser');
-  const raw = fs.readFileSync(supFile);
-  const subs = parsePgs(raw); // [{ start, end, image }] — image is a Buffer (PNG)
+// Render a PGS image (RGBA) to a cropped grayscale PGM (P5): opaque text → dark,
+// transparent → white, the orientation Tesseract reads best. null if blank.
+function pgsImageToPgm(imageData) {
+  const { width: w, height: h, data } = imageData;
+  let minX = w, minY = h, maxX = -1, maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] > 0) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < minX) return null;             // fully transparent
+  const pad = 10;
+  const cw = maxX - minX + 1, ch = maxY - minY + 1;
+  const ow = cw + pad * 2, oh = ch + pad * 2;
+  const body = Buffer.alloc(ow * oh, 255);
+  for (let y = 0; y < ch; y++) {
+    for (let x = 0; x < cw; x++) {
+      const a = data[((y + minY) * w + (x + minX)) * 4 + 3];
+      body[(y + pad) * ow + (x + pad)] = 255 - a;
+    }
+  }
+  return Buffer.concat([Buffer.from(`P5\n${ow} ${oh}\n255\n`, 'ascii'), body]);
+}
 
-  if (!subs || subs.length === 0) return '';
+async function convertPgsToSrtNative(supFile, lang, tesseractPath, tmpDir, onProgress) {
+  const { parseDisplaySets } = require('pgs-parser');
+  const raw = fs.readFileSync(supFile);
+
+  // Stream the .sup into timed events. A display set carrying object definition
+  // segments shows a subtitle; the next display set's timestamp ends it. PGS
+  // presentation timestamps are in 90 kHz units.
+  const events = []; // { ms, pgm: Buffer|null }
+  const rs = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(raw)); c.close(); } });
+  await rs.pipeThrough(parseDisplaySets()).pipeTo(new WritableStream({
+    write(ds) {
+      const pcs = ds.presentationCompositionSegment;
+      const ms = Math.round((pcs.header.presentationTimestamp || 0) / 90);
+      const pgm = ds.objectDefinitionSegments.length > 0 ? pgsImageToPgm(ds.imageData()) : null;
+      events.push({ ms, pgm });
+    },
+  }));
+
+  const cues = [];
+  for (let i = 0; i < events.length; i++) {
+    if (!events[i].pgm) continue;
+    const start = events[i].ms;
+    const end = i + 1 < events.length ? events[i + 1].ms : start + 2000;
+    if (end > start) cues.push({ start, end, pgm: events[i].pgm });
+  }
+  if (cues.length === 0) return '';
 
   const workerCount = Math.min(os.cpus().length, 4);
-  const results = new Array(subs.length);
-  let done = 0;
-  let idx  = 0;
+  const texts = new Array(cues.length);
+  let done = 0, idx = 0;
 
   await new Promise((resolve, reject) => {
     let active = 0;
-
     function next() {
-      while (active < workerCount && idx < subs.length) {
+      while (active < workerCount && idx < cues.length) {
         const i = idx++;
         active++;
-        const sub = subs[i];
-        const imgBuf = sub.image instanceof Buffer ? sub.image : renderSubtitle(sub);
-
-        tessOcrBuffer(tesseractPath, imgBuf, lang, tmpDir)
+        ocrPgmBuffer(tesseractPath, cues[i].pgm, lang, tmpDir)
           .then(text => {
-            results[i] = { start: sub.start, end: sub.end, text };
+            texts[i] = text;
             done++;
-            onProgress?.(done / subs.length);
+            onProgress?.(done / cues.length);
             active--;
-            if (done === subs.length) resolve();
+            if (done === cues.length) resolve();
             else next();
           })
-          .catch(err => { reject(err); });
+          .catch(reject);
       }
     }
     next();
   });
 
-  // Build SRT
   let srt = '';
   let num = 1;
-  for (const r of results) {
-    if (!r.text) continue;
-    srt += `${num}\n${formatSrtTimestamp(Math.round(r.start / 1e6))} --> ${formatSrtTimestamp(Math.round(r.end / 1e6))}\n${r.text}\n\n`;
+  for (let i = 0; i < cues.length; i++) {
+    const text = (texts[i] || '').trim();
+    if (!text) continue;
+    srt += `${num}\n${formatSrtTimestamp(cues[i].start)} --> ${formatSrtTimestamp(cues[i].end)}\n${text}\n\n`;
     num++;
   }
   return srt;
 }
 
 // ── pgsrip subprocess fallback ─────────────────────────────────────────────────
+
+// pgsrip/pgsocr drive Tesseract through pytesseract, which invokes the bare
+// `tesseract` command and so relies on PATH. A GUI-launched app does not inherit
+// the shell PATH, so without this the child Tesseract is not found, OCR throws
+// and pgsrip silently reports "0 ripped". Prepend the resolved Tesseract dir.
+function ocrChildEnv(tesseractPath, tmpDir) {
+  const env = { ...process.env };
+  if (tesseractPath) {
+    env.PATH = path.dirname(tesseractPath) + path.delimiter + (env.PATH || '');
+  }
+  // pytesseract writes temp images and reads them back. A missing TMPDIR or a
+  // cluttered shared /tmp makes that round-trip fail (UnicodeDecodeError),
+  // making pgsrip report "0 ripped". Point it at our fresh, writable work dir.
+  if (tmpDir) env.TMPDIR = tmpDir;
+  return env;
+}
 
 // pgsrip/pgsocr name the output after the .sup base and drop the language code
 // we embedded, inserting the detected one instead ("track_8.eng.sup" →
@@ -270,13 +350,13 @@ function findProducedSrt(supFile) {
   return match ? path.join(dir, match) : null;
 }
 
-async function convertPgsToSrtPgsrip(pgsripPath, supFile, lang, outputDir, onProgress) {
+async function convertPgsToSrtPgsrip(pgsripPath, supFile, lang, outputDir, tesseractPath, onProgress) {
   return new Promise((resolve, reject) => {
     // pgsrip filters input by language, derived from the file name. The .sup is
     // named "<base>.<lang>.sup" so the requested --language matches; otherwise
     // pgsrip treats it as "und", silently skips it, exits 0 and writes nothing.
     const args = ['--language', lang || 'und', supFile];
-    const proc = spawn(pgsripPath, args, { cwd: outputDir });
+    const proc = spawn(pgsripPath, args, { cwd: outputDir, env: ocrChildEnv(tesseractPath, outputDir) });
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => { stdout += d; onProgress?.(null); });
     proc.stderr.on('data', d => { stderr += d; });
@@ -293,12 +373,12 @@ async function convertPgsToSrtPgsrip(pgsripPath, supFile, lang, outputDir, onPro
 
 // ── pgsocr subprocess (GPU-capable) ───────────────────────────────────────────
 
-async function convertPgsToSrtPgsocr(pgsocrPath, supFile, lang, outputDir, useGpu, onProgress) {
+async function convertPgsToSrtPgsocr(pgsocrPath, supFile, lang, outputDir, useGpu, tesseractPath, onProgress) {
   return new Promise((resolve, reject) => {
     const args = ['--language', lang || 'eng'];
     if (useGpu) args.push('--model', 'florence2');
     args.push(supFile);
-    const proc = spawn(pgsocrPath, args, { cwd: outputDir });
+    const proc = spawn(pgsocrPath, args, { cwd: outputDir, env: ocrChildEnv(tesseractPath, outputDir) });
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => { stdout += d; onProgress?.(null); });
     proc.stderr.on('data', d => { stderr += d; });
@@ -322,11 +402,12 @@ async function convertPgsToSrtPgsocr(pgsocrPath, supFile, lang, outputDir, useGp
  */
 async function ocrSupFile(supFile, lang, status, opts, tmpDir, onProgress) {
   const { useGpu = false, engine = 'auto' } = opts || {};
+  const nativeAvailable = pgsAvailable() && status.tesseract.installed;
 
   const wantEngine = engine === 'auto'
     ? (status.pgsocr.installed && status.pgsocr.gpu && useGpu ? 'pgsocr'
       : status.pgsrip.installed ? 'pgsrip'
-      : pgsAvailable() && status.tesseract.installed ? 'native'
+      : nativeAvailable ? 'native'
       : null)
     : engine;
 
@@ -336,22 +417,41 @@ async function ocrSupFile(supFile, lang, status, opts, tmpDir, onProgress) {
     );
   }
 
-  if (wantEngine === 'pgsocr') {
-    return convertPgsToSrtPgsocr(
-      status.pgsocr.path, supFile, lang, tmpDir, useGpu,
-      frac => onProgress?.(frac ?? 0.5)
-    );
-  }
-  if (wantEngine === 'pgsrip') {
-    return convertPgsToSrtPgsrip(
-      status.pgsrip.path, supFile, lang, tmpDir,
-      frac => onProgress?.(frac ?? 0.5)
-    );
-  }
-  return convertPgsToSrtNative(
+  const runNative = () => convertPgsToSrtNative(
     supFile, tessLang(lang), status.tesseract.path, tmpDir,
     frac => onProgress?.(frac ?? 0.5)
   );
+
+  // pgsrip/pgsocr key off the .sup's alpha-2 name, so request the same code.
+  const iso2 = toIso2(lang);
+
+  const runEngine = (eng) => {
+    if (eng === 'pgsocr') {
+      return convertPgsToSrtPgsocr(
+        status.pgsocr.path, supFile, iso2, tmpDir, useGpu, status.tesseract.path,
+        frac => onProgress?.(frac ?? 0.5)
+      );
+    }
+    if (eng === 'pgsrip') {
+      return convertPgsToSrtPgsrip(
+        status.pgsrip.path, supFile, iso2, tmpDir, status.tesseract.path,
+        frac => onProgress?.(frac ?? 0.5)
+      );
+    }
+    return runNative();
+  };
+
+  try {
+    return await runEngine(wantEngine);
+  } catch (err) {
+    // pgsrip/pgsocr can fail for environment reasons (their child Tesseract not
+    // resolving, a malformed .sup, …). The native engine drives Tesseract via an
+    // explicit path, so fall back to it before giving up on the track.
+    if (wantEngine !== 'native' && nativeAvailable) {
+      return runNative();
+    }
+    throw err;
+  }
 }
 
 /**
@@ -373,11 +473,13 @@ async function convertPgsTracksToSrt(inputMkv, tracks, opts, onProgress) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mkv-ocr-'));
 
   try {
-    // The .sup is named "track_<id>.<lang>.sup" so pgsrip's language filter
-    // accepts it (see convertPgsToSrtPgsrip).
+    // The .sup is named "track_<id>.<iso2>.sup". pgsrip derives the file's
+    // language from that name via its alpha-2 code, then reads the file back by
+    // the same normalized name — so it MUST be alpha-2 ("en", not "eng"), or
+    // pgsrip looks for "track_<id>.en.sup" and fails (see convertPgsToSrtPgsrip).
     const specs = tracks.map(t => {
       const lang = t.lang || 'und';
-      return { trackId: t.id, lang, outputFile: path.join(tmpDir, `track_${t.id}.${lang}.sup`) };
+      return { trackId: t.id, lang, outputFile: path.join(tmpDir, `track_${t.id}.${toIso2(lang)}.sup`) };
     });
 
     // Single demux pass — the bulk of the wait, so progress maps to the first half.
