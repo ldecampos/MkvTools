@@ -150,16 +150,23 @@ function findMkvextract(mkvmergePath) {
   return process.platform === 'win32' ? 'mkvextract.exe' : 'mkvextract';
 }
 
-async function extractTrackToFile(mkvmergePath, inputFile, trackId, outputFile) {
+async function extractTracksToFiles(mkvmergePath, inputFile, specs, onProgress) {
   const mkvextract = findMkvextract(mkvmergePath);
+  const args = ['tracks', inputFile, ...specs.map(s => `${s.trackId}:${s.outputFile}`)];
   return new Promise((resolve, reject) => {
-    const proc = spawn(mkvextract, ['tracks', inputFile, `${trackId}:${outputFile}`]);
+    const proc = spawn(mkvextract, args);
     let err = '';
-    proc.stderr.on('data', d => err += d);
+    proc.stdout.on('data', d => {
+      const m = /Progress:\s*(\d+)%/.exec(d.toString());
+      if (m) onProgress?.(Number(m[1]) / 100);
+    });
+    proc.stderr.on('data', d => { err += d; });
     proc.on('close', code => {
-      if (code !== 0 && code !== 1) reject(new Error(`mkvextract failed (${code}): ${err.slice(0, 200)}`));
-      else if (!fs.existsSync(outputFile)) reject(new Error('mkvextract produced no output file'));
-      else resolve(outputFile);
+      // mkvextract exits 1 for non-fatal warnings while still producing output.
+      if (code !== 0 && code !== 1) return reject(new Error(`mkvextract failed (${code}): ${err.slice(0, 200)}`));
+      const missing = specs.filter(s => !fs.existsSync(s.outputFile));
+      if (missing.length) return reject(new Error(`mkvextract produced no output for track(s) ${missing.map(s => s.trackId).join(', ')}`));
+      resolve();
     });
     proc.on('error', reject);
   });
@@ -251,19 +258,34 @@ async function convertPgsToSrtNative(supFile, lang, tesseractPath, tmpDir, onPro
 
 // ── pgsrip subprocess fallback ─────────────────────────────────────────────────
 
+// pgsrip/pgsocr name the output after the .sup base and drop the language code
+// we embedded, inserting the detected one instead ("track_8.eng.sup" →
+// "track_8.en.srt"). Locate it by base name rather than guessing the suffix.
+function findProducedSrt(supFile) {
+  const dir = path.dirname(supFile);
+  const base = path.basename(supFile).replace(/\.sup$/i, '').replace(/\.[^.]+$/, '');
+  const esc = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`^${esc}\\.[^.]*\\.srt$|^${esc}\\.srt$`, 'i');
+  const match = fs.readdirSync(dir).find(f => re.test(f));
+  return match ? path.join(dir, match) : null;
+}
+
 async function convertPgsToSrtPgsrip(pgsripPath, supFile, lang, outputDir, onProgress) {
   return new Promise((resolve, reject) => {
-    const args = ['--language', lang || 'eng', supFile];
+    // pgsrip filters input by language, derived from the file name. The .sup is
+    // named "<base>.<lang>.sup" so the requested --language matches; otherwise
+    // pgsrip treats it as "und", silently skips it, exits 0 and writes nothing.
+    const args = ['--language', lang || 'und', supFile];
     const proc = spawn(pgsripPath, args, { cwd: outputDir });
     let stdout = '', stderr = '';
     proc.stdout.on('data', d => { stdout += d; onProgress?.(null); });
     proc.stderr.on('data', d => { stderr += d; });
     proc.on('close', code => {
-      if (code !== 0) return reject(new Error(`pgsrip failed (${code}): ${stderr.slice(0, 200)}`));
-      // pgsrip creates the .srt alongside the .sup file
-      const srtPath = supFile.replace(/\.sup$/i, '.srt');
-      if (fs.existsSync(srtPath)) resolve(fs.readFileSync(srtPath, 'utf8'));
-      else reject(new Error('pgsrip produced no .srt file'));
+      if (code !== 0) return reject(new Error(`pgsrip failed (${code}): ${(stderr || stdout).slice(0, 200)}`));
+      const srtPath = findProducedSrt(supFile);
+      if (srtPath) return resolve(fs.readFileSync(srtPath, 'utf8'));
+      const detail = (stdout || stderr).trim().split('\n').pop() || 'track skipped';
+      reject(new Error(`pgsrip produced no .srt file — ${detail}`));
     });
     proc.on('error', reject);
   });
@@ -281,10 +303,10 @@ async function convertPgsToSrtPgsocr(pgsocrPath, supFile, lang, outputDir, useGp
     proc.stdout.on('data', d => { stdout += d; onProgress?.(null); });
     proc.stderr.on('data', d => { stderr += d; });
     proc.on('close', code => {
-      if (code !== 0) return reject(new Error(`pgsocr failed (${code}): ${stderr.slice(0, 200)}`));
-      const srtPath = supFile.replace(/\.sup$/i, '.srt');
-      if (fs.existsSync(srtPath)) resolve(fs.readFileSync(srtPath, 'utf8'));
-      else reject(new Error('pgsocr produced no .srt file'));
+      if (code !== 0) return reject(new Error(`pgsocr failed (${code}): ${(stderr || stdout).slice(0, 200)}`));
+      const srtPath = findProducedSrt(supFile);
+      if (srtPath) return resolve(fs.readFileSync(srtPath, 'utf8'));
+      reject(new Error('pgsocr produced no .srt file'));
     });
     proc.on('error', reject);
   });
@@ -293,7 +315,101 @@ async function convertPgsToSrtPgsocr(pgsocrPath, supFile, lang, outputDir, useGp
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 /**
- * Convert a PGS subtitle track from an MKV to SRT text.
+ * Run the chosen OCR engine on an already-extracted .sup file.
+ *
+ * pgsrip/pgsocr receive the ISO 639 code (they map it to Tesseract data
+ * themselves); the native engine gets the Tesseract language code directly.
+ */
+async function ocrSupFile(supFile, lang, status, opts, tmpDir, onProgress) {
+  const { useGpu = false, engine = 'auto' } = opts || {};
+
+  const wantEngine = engine === 'auto'
+    ? (status.pgsocr.installed && status.pgsocr.gpu && useGpu ? 'pgsocr'
+      : status.pgsrip.installed ? 'pgsrip'
+      : pgsAvailable() && status.tesseract.installed ? 'native'
+      : null)
+    : engine;
+
+  if (!wantEngine) {
+    throw new Error(
+      'No OCR engine available. Install Tesseract (brew install tesseract) or pgsrip (pip install pgsrip).'
+    );
+  }
+
+  if (wantEngine === 'pgsocr') {
+    return convertPgsToSrtPgsocr(
+      status.pgsocr.path, supFile, lang, tmpDir, useGpu,
+      frac => onProgress?.(frac ?? 0.5)
+    );
+  }
+  if (wantEngine === 'pgsrip') {
+    return convertPgsToSrtPgsrip(
+      status.pgsrip.path, supFile, lang, tmpDir,
+      frac => onProgress?.(frac ?? 0.5)
+    );
+  }
+  return convertPgsToSrtNative(
+    supFile, tessLang(lang), status.tesseract.path, tmpDir,
+    frac => onProgress?.(frac ?? 0.5)
+  );
+}
+
+/**
+ * Convert several PGS subtitle tracks from one file to SRT in a single pass.
+ *
+ * Every track is demuxed with one mkvextract invocation, so the (potentially
+ * huge) source is read from disk only once instead of once per track.
+ *
+ * tracks: [{ id, lang }]   lang is an ISO 639 code (e.g. "eng", "spa")
+ * opts:   { mkvmergePath, useGpu, engine, customTesseractPath }
+ * onProgress: (0-1) overall fraction, or null if indeterminate
+ *
+ * Returns [{ trackId, srt }] / [{ trackId, error }] — one entry per track, so a
+ * single failed track does not abort the others.
+ */
+async function convertPgsTracksToSrt(inputMkv, tracks, opts, onProgress) {
+  const { mkvmergePath, customTesseractPath } = opts || {};
+  const status = await getStatus(customTesseractPath);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mkv-ocr-'));
+
+  try {
+    // The .sup is named "track_<id>.<lang>.sup" so pgsrip's language filter
+    // accepts it (see convertPgsToSrtPgsrip).
+    const specs = tracks.map(t => {
+      const lang = t.lang || 'und';
+      return { trackId: t.id, lang, outputFile: path.join(tmpDir, `track_${t.id}.${lang}.sup`) };
+    });
+
+    // Single demux pass — the bulk of the wait, so progress maps to the first half.
+    onProgress?.(0);
+    await extractTracksToFiles(mkvmergePath, inputMkv, specs, frac => onProgress?.(frac * 0.5));
+    onProgress?.(0.5);
+
+    const results = [];
+    for (let i = 0; i < specs.length; i++) {
+      const spec = specs[i];
+      const base = 0.5 + (i / specs.length) * 0.5;
+      const span = (1 / specs.length) * 0.5;
+      try {
+        const srt = await ocrSupFile(
+          spec.outputFile, spec.lang, status, opts, tmpDir,
+          frac => onProgress?.(base + frac * span)
+        );
+        results.push({ trackId: spec.trackId, srt });
+      } catch (err) {
+        results.push({ trackId: spec.trackId, error: err });
+      }
+    }
+
+    onProgress?.(1);
+    return results;
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+/**
+ * Convert a single PGS subtitle track from a file to SRT text.
  *
  * opts: { mkvmergePath, lang, useGpu, engine, customTesseractPath }
  * onProgress: (0-1) fraction complete, or null if indeterminate
@@ -301,64 +417,12 @@ async function convertPgsToSrtPgsocr(pgsocrPath, supFile, lang, outputDir, useGp
  * Returns the SRT string.
  */
 async function convertPgsToSrt(inputMkv, trackId, opts, onProgress) {
-  const {
-    mkvmergePath, lang = 'eng', useGpu = false, engine = 'auto',
-    customTesseractPath,
-  } = opts || {};
-
-  const status = await getStatus(customTesseractPath);
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mkv-ocr-'));
-
-  try {
-    // Extract PGS track to .sup file
-    onProgress?.(0);
-    const supFile = path.join(tmpDir, `track_${trackId}.sup`);
-    await extractTrackToFile(mkvmergePath, inputMkv, trackId, supFile);
-    onProgress?.(0.05);
-
-    // Choose engine
-    const wantEngine = engine === 'auto'
-      ? (status.pgsocr.installed && status.pgsocr.gpu && useGpu ? 'pgsocr'
-        : status.pgsrip.installed ? 'pgsrip'
-        : pgsAvailable() && status.tesseract.installed ? 'native'
-        : null)
-      : engine;
-
-    if (!wantEngine) {
-      throw new Error(
-        'No OCR engine available. Install Tesseract (brew install tesseract) or pgsrip (pip install pgsrip).'
-      );
-    }
-
-    let srt = '';
-
-    if (wantEngine === 'pgsocr') {
-      srt = await convertPgsToSrtPgsocr(
-        status.pgsocr.path, supFile, tessLang(lang),
-        tmpDir, useGpu,
-        frac => onProgress?.(0.05 + frac * 0.9)
-      );
-    } else if (wantEngine === 'pgsrip') {
-      srt = await convertPgsToSrtPgsrip(
-        status.pgsrip.path, supFile, tessLang(lang),
-        tmpDir,
-        frac => onProgress?.(0.05 + (frac ?? 0.5) * 0.9)
-      );
-    } else {
-      // Native: pgs-parser + tesseract CLI
-      srt = await convertPgsToSrtNative(
-        supFile, tessLang(lang),
-        status.tesseract.path,
-        tmpDir,
-        frac => onProgress?.(0.05 + frac * 0.9)
-      );
-    }
-
-    onProgress?.(1);
-    return srt;
-  } finally {
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-  }
+  const lang = (opts && opts.lang) || 'und';
+  const [result] = await convertPgsTracksToSrt(
+    inputMkv, [{ id: trackId, lang }], opts, onProgress
+  );
+  if (result.error) throw result.error;
+  return result.srt;
 }
 
 // Convert ISO 639-3 lang code to Tesseract language code
@@ -375,4 +439,4 @@ function tessLang(iso3) {
   return MAP[iso3] || iso3 || 'eng';
 }
 
-module.exports = { getStatus, convertPgsToSrt, pgsAvailable };
+module.exports = { getStatus, convertPgsToSrt, convertPgsTracksToSrt, pgsAvailable };

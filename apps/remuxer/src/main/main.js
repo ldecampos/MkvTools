@@ -232,25 +232,33 @@ async function runBatch(items) {
       if (settings.ocrEnabled) {
         const mkvmergePath = remuxService.findMkvmerge();
         const pgsTracks = plan.filter(p => p.role === 'subtitles' && p.keep && /pgs|s_hdmv/i.test(p.codec || ''));
-        for (const t of pgsTracks) {
-          if (cancelRequested) break;
+        if (pgsTracks.length && !cancelRequested) {
+          const labels = pgsTracks.map(t => `${t.id} (${t.lang})`).join(', ');
+          sendLog(`OCR: Converting ${pgsTracks.length} PGS track(s) to SRT in one pass: ${labels}...`, 'info');
           try {
-            sendLog(`OCR: Converting PGS track ${t.id} (${t.lang}) to SRT...`, 'info');
-            const srt = await ocrService.convertPgsToSrt(filePath, t.id, {
-              mkvmergePath,
-              lang: t.lang,
-              customTesseractPath: settings.ocrPath || '',
-            }, frac => sendProgress(filePath, Math.round((frac || 0) * 100)));
-            if (!srt.trim()) {
-              sendLog(`OCR: Track ${t.id} produced no text — keeping PGS`, 'warn');
-              continue;
+            const ocrResults = await ocrService.convertPgsTracksToSrt(
+              filePath,
+              pgsTracks.map(t => ({ id: t.id, lang: t.lang })),
+              { mkvmergePath, customTesseractPath: settings.ocrPath || '' },
+              frac => sendProgress(filePath, Math.round((frac || 0) * 100))
+            );
+            for (const r of ocrResults) {
+              const t = pgsTracks.find(p => p.id === r.trackId);
+              if (r.error) {
+                sendLog(`OCR: Track ${r.trackId} failed — keeping PGS: ${r.error.message}`, 'warn');
+                continue;
+              }
+              if (!r.srt.trim()) {
+                sendLog(`OCR: Track ${r.trackId} produced no text — keeping PGS`, 'warn');
+                continue;
+              }
+              const srtPath = path.join(os.tmpdir(), `mkvtools_ocr_${Date.now()}_${r.trackId}.srt`);
+              fs.writeFileSync(srtPath, r.srt, 'utf8');
+              convertedSubs.push({ originalTrackId: r.trackId, srtPath, track: t });
+              sendLog(`OCR: Track ${r.trackId} → SRT (${t.lang})`, 'success');
             }
-            const srtPath = path.join(os.tmpdir(), `mkvtools_ocr_${Date.now()}_${t.id}.srt`);
-            fs.writeFileSync(srtPath, srt, 'utf8');
-            convertedSubs.push({ originalTrackId: t.id, srtPath, track: t });
-            sendLog(`OCR: Track ${t.id} → SRT (${t.lang})`, 'success');
           } catch (err) {
-            sendLog(`OCR: Track ${t.id} failed — keeping PGS: ${err.message}`, 'warn');
+            sendLog(`OCR: extraction failed — keeping PGS: ${err.message}`, 'warn');
           }
         }
       }

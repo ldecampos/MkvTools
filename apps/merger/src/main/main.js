@@ -244,25 +244,40 @@ ipcMain.handle('merge', async (_, { sources, plan, movie, syncResults, videoSour
     if (settings.ocrEnabled) {
       const mkvmergePath = mkvmergeSetup.findMkvmerge();
       const pgsTracks = plan.filter(p => p.role === 'subtitles' && p.keep && /pgs|s_hdmv/i.test(p.codec || ''));
+      // Group by source so each file is demuxed once for all its PGS tracks.
+      const bySource = new Map();
       for (const t of pgsTracks) {
+        if (!bySource.has(t.sourceIndex)) bySource.set(t.sourceIndex, []);
+        bySource.get(t.sourceIndex).push(t);
+      }
+      for (const [sourceIndex, srcTracks] of bySource) {
+        const sourceFile = sources[sourceIndex].file;
+        const labels = srcTracks.map(t => `${t.id} (${t.lang})`).join(', ');
+        log(`OCR: Converting ${srcTracks.length} PGS track(s) from S${sourceIndex + 1} to SRT in one pass: ${labels}...`, 'info');
         try {
-          const sourceFile = sources[t.sourceIndex].file;
-          log(`OCR: Converting PGS track ${t.id} (${t.lang}) from S${t.sourceIndex + 1} to SRT...`, 'info');
-          const srt = await ocrService.convertPgsToSrt(sourceFile, t.id, {
-            mkvmergePath,
-            lang: t.lang,
-            customTesseractPath: settings.ocrPath || '',
-          }, frac => mainWindow?.webContents.send('progress', Math.round((frac || 0) * 100)));
-          if (!srt.trim()) {
-            log(`OCR: Track ${t.id} produced no text — keeping PGS`, 'warn');
-            continue;
+          const ocrResults = await ocrService.convertPgsTracksToSrt(
+            sourceFile,
+            srcTracks.map(t => ({ id: t.id, lang: t.lang })),
+            { mkvmergePath, customTesseractPath: settings.ocrPath || '' },
+            frac => mainWindow?.webContents.send('progress', Math.round((frac || 0) * 100))
+          );
+          for (const r of ocrResults) {
+            const t = srcTracks.find(p => p.id === r.trackId);
+            if (r.error) {
+              log(`OCR: Track ${r.trackId} failed — keeping PGS: ${r.error.message}`, 'warn');
+              continue;
+            }
+            if (!r.srt.trim()) {
+              log(`OCR: Track ${r.trackId} produced no text — keeping PGS`, 'warn');
+              continue;
+            }
+            const srtPath = path.join(os.tmpdir(), `mkvtools_ocr_${Date.now()}_${sourceIndex}_${r.trackId}.srt`);
+            fs.writeFileSync(srtPath, r.srt, 'utf8');
+            convertedSubs.push({ originalTrackId: r.trackId, sourceIndex, srtPath, track: t });
+            log(`OCR: Track ${r.trackId} → SRT (${t.lang})`, 'success');
           }
-          const srtPath = path.join(os.tmpdir(), `mkvtools_ocr_${Date.now()}_${t.id}.srt`);
-          fs.writeFileSync(srtPath, srt, 'utf8');
-          convertedSubs.push({ originalTrackId: t.id, sourceIndex: t.sourceIndex, srtPath, track: t });
-          log(`OCR: Track ${t.id} → SRT (${t.lang})`, 'success');
         } catch (err) {
-          log(`OCR: Track ${t.id} failed — keeping PGS: ${err.message}`, 'warn');
+          log(`OCR: extraction from S${sourceIndex + 1} failed — keeping PGS: ${err.message}`, 'warn');
         }
       }
     }
