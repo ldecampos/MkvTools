@@ -62,16 +62,20 @@ jobs:
             codesign --force --sign - "$bin"
           }
 
-          # mkvmerge → both apps. dylibbundler copies every non-system dylib into
-          # vendor/libs and rewrites the install names to @executable_path/libs,
-          # so the binary runs on a clean Mac without Homebrew installed.
+          # mkvmerge (remux) + mkvextract (PGS→SRT track extraction) → both apps.
+          # dylibbundler copies every non-system dylib into vendor/libs and
+          # rewrites the install names to @executable_path/libs, so the binaries
+          # run on a clean Mac without Homebrew installed.
           for app in apps/remuxer apps/merger; do
             mkdir -p "$app/vendor"
-            cp "$BREW/bin/mkvmerge" "$app/vendor/mkvmerge"
-            chmod +x "$app/vendor/mkvmerge"
-            dylibbundler -cd -of -b -x "$app/vendor/mkvmerge" -d "$app/vendor/libs" -p '@executable_path/libs/'
+            for tool in mkvmerge mkvextract; do
+              cp "$BREW/bin/$tool" "$app/vendor/$tool"
+              chmod +x "$app/vendor/$tool"
+              dylibbundler -cd -of -b -x "$app/vendor/$tool" -d "$app/vendor/libs" -p '@executable_path/libs/'
+            done
             codesign --force --sign - "$app/vendor/libs/"*.dylib
             fix_vendor_binary "$app/vendor/mkvmerge"
+            fix_vendor_binary "$app/vendor/mkvextract"
           done
           # ffmpeg → Merger only (audio sync detection), made self-contained too.
           cp "$BREW/bin/ffmpeg" "apps/merger/vendor/ffmpeg"
@@ -84,7 +88,9 @@ jobs:
           # signature makes dyld refuse to launch. Run the vendored binaries so
           # such breakage fails the build instead of shipping a dead app.
           ./apps/remuxer/vendor/mkvmerge --version
+          ./apps/remuxer/vendor/mkvextract --version
           ./apps/merger/vendor/mkvmerge --version
+          ./apps/merger/vendor/mkvextract --version
           ./apps/merger/vendor/ffmpeg -version
 
       - name: Vendor binaries (Windows)
@@ -92,10 +98,11 @@ jobs:
         shell: pwsh
         run: |
           choco install mkvtoolnix --no-progress -y
-          $src = "C:\Program Files\MKVToolNix\mkvmerge.exe"
           foreach ($app in @("apps\remuxer", "apps\merger")) {
             New-Item -ItemType Directory -Force "$app\vendor" | Out-Null
-            Copy-Item $src "$app\vendor\mkvmerge.exe"
+            foreach ($tool in @("mkvmerge", "mkvextract")) {
+              Copy-Item "C:\Program Files\MKVToolNix\$tool.exe" "$app\vendor\$tool.exe"
+            }
           }
           # Static ffmpeg (single self-contained .exe) for the Merger.
           Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
@@ -107,8 +114,12 @@ jobs:
           # DLL surfaces here instead of on the user's machine. $env:SystemRoot
           # is kept so the loader can still find the core Windows DLLs.
           $env:PATH = "$env:SystemRoot\System32"
-          & ".\apps\remuxer\vendor\mkvmerge.exe" --version
-          if ($LASTEXITCODE -ne 0) { throw "vendored mkvmerge.exe failed to run" }
+          foreach ($app in @("apps\remuxer", "apps\merger")) {
+            foreach ($tool in @("mkvmerge", "mkvextract")) {
+              & ".\$app\vendor\$tool.exe" --version
+              if ($LASTEXITCODE -ne 0) { throw "vendored $tool.exe failed to run" }
+            }
+          }
           & ".\apps\merger\vendor\ffmpeg.exe" -version
           if ($LASTEXITCODE -ne 0) { throw "vendored ffmpeg.exe failed to run" }
 
@@ -145,9 +156,11 @@ jobs:
 
           for app in apps/remuxer apps/merger; do
             mkdir -p "$app/vendor"
-            cp "$(which mkvmerge)" "$app/vendor/mkvmerge"
-            chmod +x "$app/vendor/mkvmerge"
-            bundle_elf_libs "$app/vendor/mkvmerge" "$app/vendor/libs"
+            for tool in mkvmerge mkvextract; do
+              cp "$(which $tool)" "$app/vendor/$tool"
+              chmod +x "$app/vendor/$tool"
+              bundle_elf_libs "$app/vendor/$tool" "$app/vendor/libs"
+            done
           done
           # Static ffmpeg (self-contained) for the Merger. Use the GitHub-hosted
           # BtbN build — johnvansickle.com is a single host that is frequently
@@ -160,10 +173,11 @@ jobs:
           cp "$(find . -type f -path '*/bin/ffmpeg' | head -1)" apps/merger/vendor/ffmpeg
           chmod +x apps/merger/vendor/ffmpeg
 
-          # Prove self-containment: run the vendored mkvmerge in a clean Ubuntu
+          # Prove self-containment: run the vendored binaries in a clean Ubuntu
           # container that has NO MKVToolNix installed. If a library is missing
           # this fails the build instead of shipping a broken Linux app.
-          docker run --rm -v "$PWD/apps/remuxer/vendor:/v:ro" ubuntu:24.04 /v/mkvmerge --version
+          docker run --rm -v "$PWD/apps/remuxer/vendor:/v:ro" ubuntu:24.04 \
+            sh -c '/v/mkvmerge --version && /v/mkvextract --version'
 
       # ── Build ──────────────────────────────────────────────────────────────────
 
