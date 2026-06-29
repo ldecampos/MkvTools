@@ -133,7 +133,14 @@ jobs:
               esac
               cp -n "$lib" "$libdir/" || true
             done
-            patchelf --set-rpath '$ORIGIN/libs' "$bin"
+            # DT_RUNPATH is not transitive, so set a (transitive) DT_RPATH on the
+            # binary and an $ORIGIN rpath on every bundled lib — that way a lib
+            # pulling in another bundled lib (e.g. libmatroska → libicui18n) still
+            # resolves it from the same folder.
+            patchelf --force-rpath --set-rpath '$ORIGIN/libs' "$bin"
+            for lib in "$libdir"/*.so*; do
+              [ -f "$lib" ] && patchelf --force-rpath --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
+            done
           }
 
           for app in apps/remuxer apps/merger; do
