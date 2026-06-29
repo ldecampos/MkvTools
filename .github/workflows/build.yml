@@ -142,10 +142,15 @@ jobs:
             chmod +x "$app/vendor/mkvmerge"
             bundle_elf_libs "$app/vendor/mkvmerge" "$app/vendor/libs"
           done
-          # Static ffmpeg (single self-contained binary) for the Merger.
-          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz
+          # Static ffmpeg (self-contained) for the Merger. Use the GitHub-hosted
+          # BtbN build — johnvansickle.com is a single host that is frequently
+          # unavailable and silently serves error pages. -f makes curl fail on
+          # HTTP errors instead of writing a non-tar body.
+          curl -fL --retry 3 --retry-delay 5 \
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
+            -o ffmpeg.tar.xz
           tar xf ffmpeg.tar.xz
-          cp ffmpeg-*-amd64-static/ffmpeg apps/merger/vendor/ffmpeg
+          cp "$(find . -type f -path '*/bin/ffmpeg' | head -1)" apps/merger/vendor/ffmpeg
           chmod +x apps/merger/vendor/ffmpeg
 
           # Prove self-containment: run the vendored mkvmerge in a clean Ubuntu
