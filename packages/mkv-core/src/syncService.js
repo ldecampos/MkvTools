@@ -22,9 +22,12 @@ function crossCorrelate(bufA, bufB) {
 const EXTRACT_RATE    = 8000;          // Hz — PCM extraction rate fed to the worker
 const WINDOW_SEC      = 30;            // seconds of audio per sample point
 const MIN_CONF        = 0.25;          // minimum correlation confidence to accept a measurement
-const SAMPLE_NORMAL   = [0.05, 0.50, 0.82];             // same-language: dialogue is distinctive
-const SAMPLE_FALLBACK = [0.05, 0.25, 0.45, 0.65, 0.82]; // effects-only: more points to compensate
+const SAMPLE_NORMAL   = [0.06, 0.20, 0.35, 0.50, 0.65, 0.82];             // same-language: dialogue is distinctive
+const SAMPLE_FALLBACK = [0.05, 0.16, 0.27, 0.38, 0.50, 0.62, 0.74, 0.85]; // effects-only: sample more to outvote noise
 const LOWPASS_HZ      = 300;           // cut-off for music/effects fallback (no dialogue above ~300 Hz)
+const RESIDUAL_TOL_MS = 120;           // a sample within this of the consensus line counts as an inlier
+const CONST_TOL_MS    = 150;           // max disagreement among inliers to still call it one constant offset
+const MIN_SLOPE_MS_S  = 0.5;           // |slope| at/above this (ms/s) is treated as real speed drift
 
 /**
  * Analyze sync between sources[0] (reference) and each additional source.
@@ -117,64 +120,94 @@ async function analyzeSyncSources(sources, onLog) {
       continue;
     }
 
-    const avgConf = confs.reduce((a, b) => a + b, 0) / confs.length;
-    const spread  = Math.max(...lags) - Math.min(...lags);
-    const avgLag  = Math.round(lags.reduce((a, b) => a + b, 0) / lags.length);
+    // ── Robust consensus ─────────────────────────────────────────────────────
+    // Extra sample points only help if one high-confidence false peak can't
+    // hijack the verdict. Fit lag = slope·t + intercept with Theil–Sen (median of
+    // pairwise slopes + median intercept), which tolerates up to ~29% bad samples,
+    // then drop any sample that falls off that line before deciding.
+    const n = lags.length;
 
-    if (lags.length === 1 || spread < 150) {
-      if (Math.abs(avgLag) < 100) {
-        onLog?.(`  ✓ In sync — offset ${avgLag >= 0 ? '+' : ''}${avgLag}ms is within tolerance, no correction needed`);
-        results.push({ sourceIndex: i, status: 'in-sync', offsetMs: 0, speedCorrection: null, confidence: avgConf });
-      } else {
-        const hint = Math.abs(avgLag) < 2000
-          ? 'minor sync difference (re-encode or container change)'
-          : 'large sync difference (possibly different sync master or HDR/SDR variant)';
-        onLog?.(`  ✓ Constant offset ${avgLag >= 0 ? '+' : ''}${avgLag}ms — ${hint}`);
-        onLog?.(`    Applying: --sync TID:${avgLag} to audio+subtitle tracks of S${i + 1}`);
-        results.push({ sourceIndex: i, status: 'offset', offsetMs: avgLag, speedCorrection: null, confidence: avgConf });
-      }
+    let slope = 0; // ms/s
+    if (n >= 2) {
+      const pairSlopes = [];
+      for (let p = 0; p < n; p++)
+        for (let q = p + 1; q < n; q++)
+          if (times[q] !== times[p]) pairSlopes.push((lags[q] - lags[p]) / (times[q] - times[p]));
+      slope = median(pairSlopes);
+    }
+    const intercept = median(lags.map((l, k) => l - slope * times[k])); // ms at t=0
+
+    const inliers = [];
+    for (let k = 0; k < n; k++) {
+      if (Math.abs(lags[k] - (slope * times[k] + intercept)) <= RESIDUAL_TOL_MS) inliers.push(k);
+    }
+    if (inliers.length < n) {
+      const dropped = lags.filter((_, k) => !inliers.includes(k)).map(l => (l >= 0 ? '+' : '') + l + 'ms');
+      onLog?.(`  Ignored ${dropped.length} outlier sample(s) off the consensus line: ${dropped.join(', ')}`);
+    }
+
+    const inLags  = inliers.map(k => lags[k]);
+    const inTimes = inliers.map(k => times[k]);
+    const inConfs = inliers.map(k => confs[k]);
+    const avgConf = inConfs.length ? inConfs.reduce((a, b) => a + b, 0) / inConfs.length : 0;
+
+    // Fewer than half the samples agree → genuinely inconsistent material
+    if (n >= 3 && inliers.length < Math.ceil(n / 2)) {
+      const lagStr = lags.map(l => (l >= 0 ? '+' : '') + l + 'ms').join(' → ');
+      onLog?.(`  ✗ No consensus among ${n} samples (${lagStr}) — different edit versions`);
+      onLog?.(`    No auto-correction applied. Verify tracks manually or use a single source.`);
+      results.push({ sourceIndex: i, status: 'different-cuts', offsetMs: 0, speedCorrection: null, confidence: avgConf, lags });
       continue;
     }
 
-    // Check for linear drift (speed difference)
-    if (lags.length >= 2) {
-      const n = lags.length;
-      const xMean = times.reduce((a, b) => a + b, 0) / n;
-      const yMean = lags.reduce((a, b) => a + b, 0) / n;
-      const ssXY  = times.reduce((s, x, i2) => s + (x - xMean) * (lags[i2] - yMean), 0);
-      const ssXX  = times.reduce((s, x) => s + (x - xMean) ** 2, 0);
-      const slope = ssXX === 0 ? 0 : ssXY / ssXX; // ms/s
+    // Speed drift: needs ≥3 agreeing points (two always fit a line) and a real slope
+    const inlierSpan = inTimes.length ? Math.max(...inTimes) - Math.min(...inTimes) : 0;
+    if (inliers.length >= 3 && Math.abs(slope) >= MIN_SLOPE_MS_S && inlierSpan > 0) {
+      const offsetMs   = Math.round(intercept);
+      const refMs      = Math.round(refDuration * 1000);
+      const adjustedMs = Math.round(refMs * (1 + slope / 1000));
+      const driftPerMin = (Math.abs(slope) * 60).toFixed(1);
+      const absSlopePct = Math.abs(slope / 10); // ms/s → % of speed
 
-      if (Math.abs(slope) >= 0.5) {
-        const offsetMs   = Math.round(yMean - slope * xMean);
-        const refMs      = Math.round(refDuration * 1000);
-        const adjustedMs = Math.round(refMs * (1 + slope / 1000));
-        const driftPerMin = (Math.abs(slope) * 60).toFixed(1);
-        const absSlopePct = Math.abs(slope / 10); // ms/s → % of speed
+      // Human-readable cause hint
+      let cause = 'encode speed variance';
+      if (Math.abs(absSlopePct - 4.1) < 0.3)       cause = 'NTSC↔PAL (23.976↔25fps)';
+      else if (Math.abs(absSlopePct - 0.1) < 0.05) cause = '23.976↔24fps conversion';
+      else if (absSlopePct > 2)                    cause = 'significant frame-rate difference';
 
-        // Human-readable cause hint
-        let cause = 'encode speed variance';
-        if (Math.abs(absSlopePct - 4.1) < 0.3)  cause = 'NTSC↔PAL (23.976↔25fps)';
-        else if (Math.abs(absSlopePct - 0.1) < 0.05) cause = '23.976↔24fps conversion';
-        else if (absSlopePct > 2)                cause = 'significant frame-rate difference';
-
-        onLog?.(`  ✓ Speed drift detected: ${slope >= 0 ? '+' : ''}${slope.toFixed(2)}ms/s (${driftPerMin}ms/min) → ${cause}`);
-        onLog?.(`    At t=0: ${offsetMs >= 0 ? '+' : ''}${offsetMs}ms offset  |  total over ${fmtDuration(refDuration)}: ~${Math.round(Math.abs(slope) * refDuration)}ms`);
-        onLog?.(`    Applying: --sync TID:${offsetMs},${refMs}/${adjustedMs} to audio+subtitle tracks of S${i + 1}`);
-        results.push({
-          sourceIndex: i, status: 'drift', offsetMs,
-          speedCorrection: { originalMs: refMs, adjustedMs },
-          confidence: avgConf
-        });
-        continue;
-      }
+      onLog?.(`  ✓ Speed drift detected: ${slope >= 0 ? '+' : ''}${slope.toFixed(2)}ms/s (${driftPerMin}ms/min) → ${cause}`);
+      onLog?.(`    At t=0: ${offsetMs >= 0 ? '+' : ''}${offsetMs}ms offset  |  total over ${fmtDuration(refDuration)}: ~${Math.round(Math.abs(slope) * refDuration)}ms`);
+      onLog?.(`    Applying: --sync TID:${offsetMs},${refMs}/${adjustedMs} to audio+subtitle tracks of S${i + 1}`);
+      results.push({
+        sourceIndex: i, status: 'drift', offsetMs,
+        speedCorrection: { originalMs: refMs, adjustedMs },
+        confidence: avgConf
+      });
+      continue;
     }
 
-    // Spread too high, not linear → different cuts
-    const lagStr = lags.map(l => (l >= 0 ? '+' : '') + l + 'ms').join(' → ');
-    onLog?.(`  ✗ Inconsistent offsets (${lagStr}, spread=${spread}ms) — different edit versions`);
-    onLog?.(`    No auto-correction applied. Verify tracks manually or use a single source.`);
-    results.push({ sourceIndex: i, status: 'different-cuts', offsetMs: 0, speedCorrection: null, confidence: avgConf, lags });
+    // Constant offset: the inliers must still agree on a single value
+    const constSpread = inLags.length ? Math.max(...inLags) - Math.min(...inLags) : 0;
+    if (inLags.length >= 2 && constSpread > CONST_TOL_MS) {
+      const lagStr = inLags.map(l => (l >= 0 ? '+' : '') + l + 'ms').join(' → ');
+      onLog?.(`  ✗ Inconsistent offsets (${lagStr}, spread=${constSpread}ms) — different edit versions`);
+      onLog?.(`    No auto-correction applied. Verify tracks manually or use a single source.`);
+      results.push({ sourceIndex: i, status: 'different-cuts', offsetMs: 0, speedCorrection: null, confidence: avgConf, lags });
+      continue;
+    }
+
+    const offsetMs = Math.round(median(inLags));
+    if (Math.abs(offsetMs) < 100) {
+      onLog?.(`  ✓ In sync — offset ${offsetMs >= 0 ? '+' : ''}${offsetMs}ms is within tolerance (${inliers.length}/${n} samples agree), no correction needed`);
+      results.push({ sourceIndex: i, status: 'in-sync', offsetMs: 0, speedCorrection: null, confidence: avgConf });
+    } else {
+      const hint = Math.abs(offsetMs) < 2000
+        ? 'minor sync difference (re-encode or container change)'
+        : 'large sync difference (possibly different sync master or HDR/SDR variant)';
+      onLog?.(`  ✓ Constant offset ${offsetMs >= 0 ? '+' : ''}${offsetMs}ms — ${hint} (${inliers.length}/${n} samples agree)`);
+      onLog?.(`    Applying: --sync TID:${offsetMs} to audio+subtitle tracks of S${i + 1}`);
+      results.push({ sourceIndex: i, status: 'offset', offsetMs, speedCorrection: null, confidence: avgConf });
+    }
   }
 
   onLog?.(`${'─'.repeat(48)}`);
@@ -225,6 +258,13 @@ function extractPcm(ffmpeg, filePath, startSec, duration, streamIdx = 0, lowpass
     });
     proc.on('error', reject);
   });
+}
+
+function median(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
 function fmtTime(secs) {
