@@ -19,9 +19,12 @@ function crossCorrelate(bufA, bufB) {
   });
 }
 
-const EXTRACT_RATE = 8000;   // Hz — PCM extraction rate fed to the worker
-const WINDOW_SEC   = 30;     // seconds of audio per sample point
-const MIN_CONF     = 0.25;   // minimum correlation confidence to accept a measurement
+const EXTRACT_RATE    = 8000;          // Hz — PCM extraction rate fed to the worker
+const WINDOW_SEC      = 30;            // seconds of audio per sample point
+const MIN_CONF        = 0.25;          // minimum correlation confidence to accept a measurement
+const SAMPLE_NORMAL   = [0.05, 0.50, 0.82];             // same-language: dialogue is distinctive
+const SAMPLE_FALLBACK = [0.05, 0.25, 0.45, 0.65, 0.82]; // effects-only: more points to compensate
+const LOWPASS_HZ      = 300;           // cut-off for music/effects fallback (no dialogue above ~300 Hz)
 
 /**
  * Analyze sync between sources[0] (reference) and each additional source.
@@ -71,8 +74,19 @@ async function analyzeSyncSources(sources, onLog) {
       continue;
     }
 
-    // Three sample points at 5%, 50% and 82% of the shorter file
-    const points = [0.05, 0.50, 0.82]
+    // Pick matching-language audio streams for correlation
+    const { idxA, idxB, lang: audioLang } = pickAudioStreamIndex(
+      sources[0].tracks || [], sources[i].tracks || []
+    );
+    const useFallback = !audioLang;
+    if (audioLang) {
+      onLog?.(`  Using [${audioLang}] audio stream for correlation (S1:a:${idxA} ↔ S${i + 1}:a:${idxB})`);
+    } else {
+      onLog?.(`  No common audio language — correlating music/effects only (lowpass ${LOWPASS_HZ} Hz, ${SAMPLE_FALLBACK.length} samples)`);
+    }
+
+    const sampleFractions = useFallback ? SAMPLE_FALLBACK : SAMPLE_NORMAL;
+    const points = sampleFractions
       .map(f => Math.floor(minDur * f))
       .filter(t => t + WINDOW_SEC < minDur);
 
@@ -83,8 +97,8 @@ async function analyzeSyncSources(sources, onLog) {
     for (const pt of points) {
       try {
         const [bufA, bufB] = await Promise.all([
-          extractPcm(ffmpeg, sources[0].file, pt, WINDOW_SEC),
-          extractPcm(ffmpeg, sources[i].file, pt, WINDOW_SEC),
+          extractPcm(ffmpeg, sources[0].file, pt, WINDOW_SEC, idxA, useFallback),
+          extractPcm(ffmpeg, sources[i].file, pt, WINDOW_SEC, idxB, useFallback),
         ]);
         const { lagMs, confidence } = await crossCorrelate(bufA, bufB);
         const sign = lagMs >= 0 ? '+' : '';
@@ -168,17 +182,37 @@ async function analyzeSyncSources(sources, onLog) {
   return results;
 }
 
+/**
+ * Find the 0-based audio stream index in each source that shares a language.
+ * Prefers the first language present in both. Falls back to index 0 if none match.
+ * Returns { idxA, idxB, lang } — lang is null when no common language was found.
+ */
+function pickAudioStreamIndex(tracksA, tracksB) {
+  const audiosA = tracksA.filter(t => t.type === 'audio');
+  const audiosB = tracksB.filter(t => t.type === 'audio');
+
+  for (let a = 0; a < audiosA.length; a++) {
+    const lang = audiosA[a].lang;
+    if (!lang || lang === 'und') continue;
+    const b = audiosB.findIndex(t => t.lang === lang);
+    if (b !== -1) return { idxA: a, idxB: b, lang };
+  }
+
+  return { idxA: 0, idxB: 0, lang: null };
+}
+
 // Extract raw PCM from a file at a given time position
-function extractPcm(ffmpeg, filePath, startSec, duration) {
+function extractPcm(ffmpeg, filePath, startSec, duration, streamIdx = 0, lowpass = false) {
   return new Promise((resolve, reject) => {
     const args = [
       '-hide_banner', '-loglevel', 'error',
       '-ss', String(startSec),
       '-t', String(duration),
       '-i', filePath,
-      '-map', '0:a:0',
+      '-map', `0:a:${streamIdx}`,
       '-ac', '1',
       '-ar', String(EXTRACT_RATE),
+      ...(lowpass ? ['-af', `lowpass=f=${LOWPASS_HZ}`] : []),
       '-f', 's16le', '-',
     ];
     const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
