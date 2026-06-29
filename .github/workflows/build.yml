@@ -49,6 +49,19 @@ jobs:
         run: |
           brew install mkvtoolnix ffmpeg dylibbundler
           BREW=$(brew --prefix)
+
+          # dylibbundler 1.0.5 adds the '@executable_path/libs/' LC_RPATH twice,
+          # which makes dyld refuse to load the binary ("duplicate LC_RPATH").
+          # Collapse it to a single entry, then re-sign ad-hoc — dylibbundler's
+          # rewrite plus this fix invalidate the signature, and an unsigned
+          # binary would be killed by Gatekeeper on a clean Mac.
+          fix_vendor_binary() {
+            local bin="$1"
+            while install_name_tool -delete_rpath '@executable_path/libs/' "$bin" 2>/dev/null; do :; done
+            install_name_tool -add_rpath '@executable_path/libs/' "$bin"
+            codesign --force --sign - "$bin"
+          }
+
           # mkvmerge → both apps. dylibbundler copies every non-system dylib into
           # vendor/libs and rewrites the install names to @executable_path/libs,
           # so the binary runs on a clean Mac without Homebrew installed.
@@ -57,18 +70,22 @@ jobs:
             cp "$BREW/bin/mkvmerge" "$app/vendor/mkvmerge"
             chmod +x "$app/vendor/mkvmerge"
             dylibbundler -cd -of -b -x "$app/vendor/mkvmerge" -d "$app/vendor/libs" -p '@executable_path/libs/'
-            # dylibbundler rewrites install names, invalidating the signatures.
-            # Re-sign ad-hoc (libs before the executable) so the spawned binary
-            # is not killed by Gatekeeper on a clean Mac.
             codesign --force --sign - "$app/vendor/libs/"*.dylib
-            codesign --force --sign - "$app/vendor/mkvmerge"
+            fix_vendor_binary "$app/vendor/mkvmerge"
           done
           # ffmpeg → Merger only (audio sync detection), made self-contained too.
           cp "$BREW/bin/ffmpeg" "apps/merger/vendor/ffmpeg"
           chmod +x "apps/merger/vendor/ffmpeg"
           dylibbundler -cd -of -b -x "apps/merger/vendor/ffmpeg" -d "apps/merger/vendor/libs" -p '@executable_path/libs/'
           codesign --force --sign - "apps/merger/vendor/libs/"*.dylib
-          codesign --force --sign - "apps/merger/vendor/ffmpeg"
+          fix_vendor_binary "apps/merger/vendor/ffmpeg"
+
+          # Smoke test: a duplicate LC_RPATH, a missing dylib or a broken
+          # signature makes dyld refuse to launch. Run the vendored binaries so
+          # such breakage fails the build instead of shipping a dead app.
+          ./apps/remuxer/vendor/mkvmerge --version
+          ./apps/merger/vendor/mkvmerge --version
+          ./apps/merger/vendor/ffmpeg -version
 
       - name: Vendor binaries (Windows)
         if: matrix.platform == 'win'
@@ -86,21 +103,55 @@ jobs:
           $ff = Get-ChildItem -Recurse ffmpeg_dl -Filter ffmpeg.exe | Select-Object -First 1
           Copy-Item $ff.FullName "apps\merger\vendor\ffmpeg.exe"
 
+          # Smoke test the vendored binaries from an empty PATH, so a missing
+          # DLL surfaces here instead of on the user's machine. $env:SystemRoot
+          # is kept so the loader can still find the core Windows DLLs.
+          $env:PATH = "$env:SystemRoot\System32"
+          & ".\apps\remuxer\vendor\mkvmerge.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "vendored mkvmerge.exe failed to run" }
+          & ".\apps\merger\vendor\ffmpeg.exe" -version
+          if ($LASTEXITCODE -ne 0) { throw "vendored ffmpeg.exe failed to run" }
+
       - name: Vendor binaries (Linux)
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y mkvtoolnix xz-utils
+          sudo apt-get install -y mkvtoolnix xz-utils patchelf
+
+          # Ubuntu's mkvmerge is dynamically linked against libmatroska/libebml/…
+          # which are absent on a machine without MKVToolNix. Bundle every
+          # non-core shared library next to the binary and point its rpath at
+          # them (the Linux analogue of dylibbundler on macOS). glibc and the
+          # dynamic loader are intentionally left to the host to avoid ABI
+          # mismatches.
+          bundle_elf_libs() {
+            local bin="$1" libdir="$2"
+            mkdir -p "$libdir"
+            ldd "$bin" | awk '/=> \//{print $3}' | while read -r lib; do
+              case "$(basename "$lib")" in
+                ld-linux*|libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|libresolv.so*) continue ;;
+              esac
+              cp -n "$lib" "$libdir/" || true
+            done
+            patchelf --set-rpath '$ORIGIN/libs' "$bin"
+          }
+
           for app in apps/remuxer apps/merger; do
             mkdir -p "$app/vendor"
             cp "$(which mkvmerge)" "$app/vendor/mkvmerge"
             chmod +x "$app/vendor/mkvmerge"
+            bundle_elf_libs "$app/vendor/mkvmerge" "$app/vendor/libs"
           done
           # Static ffmpeg (single self-contained binary) for the Merger.
           curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o ffmpeg.tar.xz
           tar xf ffmpeg.tar.xz
           cp ffmpeg-*-amd64-static/ffmpeg apps/merger/vendor/ffmpeg
           chmod +x apps/merger/vendor/ffmpeg
+
+          # Prove self-containment: run the vendored mkvmerge in a clean Ubuntu
+          # container that has NO MKVToolNix installed. If a library is missing
+          # this fails the build instead of shipping a broken Linux app.
+          docker run --rm -v "$PWD/apps/remuxer/vendor:/v:ro" ubuntu:24.04 /v/mkvmerge --version
 
       # ── Build ──────────────────────────────────────────────────────────────────
 

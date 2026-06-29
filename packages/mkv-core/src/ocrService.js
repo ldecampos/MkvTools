@@ -19,13 +19,48 @@ const os   = require('os');
 
 // ── Tool detection ─────────────────────────────────────────────────────────────
 
+// Directories that GUI-launched apps miss because the OS does not load the
+// shell profile: Homebrew, pip --user and the Tesseract installer all live
+// outside the minimal PATH a desktop launcher hands to the process.
+const EXTRA_BIN_DIRS = process.platform === 'win32'
+  ? [
+      'C:\\Program Files\\Tesseract-OCR',
+      'C:\\Program Files (x86)\\Tesseract-OCR',
+    ]
+  : [
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/usr/bin',
+      path.join(os.homedir(), '.local', 'bin'),
+    ];
+
+// Extensions a bare command may carry on Windows (PATHEXT essentials).
+const WIN_EXES = ['.exe', '.cmd', '.bat'];
+
 async function which(cmd) {
-  return new Promise(resolve => {
+  // 1) Honour PATH via the system resolver.
+  const fromPath = await new Promise(resolve => {
     const tool = process.platform === 'win32' ? 'where' : 'which';
     execFile(tool, [cmd], { timeout: 3000 }, (err, stdout) => {
       resolve(err ? null : stdout.trim().split('\n')[0] || null);
     });
   });
+  if (fromPath) return fromPath;
+
+  // 2) Fall back to common install dirs missing from a GUI app's PATH.
+  const names = process.platform === 'win32'
+    ? (path.extname(cmd) ? [cmd] : WIN_EXES.map(ext => cmd + ext))
+    : [cmd];
+  for (const dir of EXTRA_BIN_DIRS) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try {
+        await fs.promises.access(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch (_) { /* not here, keep looking */ }
+    }
+  }
+  return null;
 }
 
 async function runCmd(bin, args, timeout = 5000) {
