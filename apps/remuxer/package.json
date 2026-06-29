@@ -1,6 +1,6 @@
 {
   "name": "mkv-remuxer",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Simple MKV remux tool with track filtering and naming templates",
   "author": "Luis de Campos <luisdecampos@gmail.com>",
   "license": "MIT",
