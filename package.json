@@ -1,6 +1,6 @@
 {
   "name": "mkvtools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Monorepo for MKV Remuxer and MKV Merger desktop apps",
   "author": "Luis de Campos <luisdecampos@gmail.com>",

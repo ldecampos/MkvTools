@@ -1,6 +1,6 @@
 {
   "name": "mkv-merger",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Merge best tracks from multiple MKV sources into one file",
   "author": "Luis de Campos <luisdecampos@gmail.com>",
   "license": "MIT",
